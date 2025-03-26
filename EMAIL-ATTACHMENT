@@ -1,0 +1,567 @@
+*&---------------------------------------------------------------------*
+*& Report  ZMM_PO_DELV_FOLLOWUP_REMINDER
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+* Author                : Rakesh Gupta
+* Functional Consultant : Reetika Malhotra
+* Creation date         : 04.09.2024
+* Program Description   : Auto Reminder of Material PO's for Delivery Follow-up
+* Request Number        : DEVK979900
+* CCF Number            :
+*---------------------------------------------------------------------*
+*
+* MODIFICATION HISTORY
+*
+* Modified by         :
+* Modification Date   :
+* Correction Number   :
+* Request Number      :
+* Change Description  :
+*---------------------------------------------------------------------*
+
+REPORT zmm_po_delv_followup_reminder.
+
+TABLES : ekko, ekpo, mara, t001w, t001.
+
+TABLES : sscrfields.
+
+DATA: go_data     TYPE REF TO data,
+      lr_tabdescr TYPE REF TO cl_abap_structdescr,
+      lr_data     TYPE REF TO data,
+      lt_dfies    TYPE ddfields,
+      ls_dfies    TYPE dfies.
+
+FIELD-SYMBOLS: <gt_data> TYPE ANY TABLE.
+
+DATA : lt_me2n TYPE TABLE OF merep_outtab_purchdoc,
+       ls_me2n TYPE merep_outtab_purchdoc.
+
+
+*ALV data declarations
+DATA: gr_table     TYPE REF TO cl_salv_table,
+      gr_functions TYPE REF TO cl_salv_functions,
+      gr_layout    TYPE REF TO cl_salv_layout,
+      gr_columns   TYPE REF TO cl_salv_columns_table,
+      l_column     TYPE REF TO cl_salv_column,
+      gr_display   TYPE REF TO cl_salv_display_settings,
+      rs_variant   TYPE disvariant.
+
+DATA : is_variant TYPE disvariant,
+       lv_exit    TYPE c,
+       set_lay    TYPE slis_vari,
+       set_key    TYPE salv_s_layout_key,
+       r_lay      TYPE REF TO cl_salv_layout.
+
+TYPES: BEGIN OF ty_s_cline,
+         line TYPE c LENGTH 1024, " Line of type Character
+       END OF ty_s_cline .
+
+TYPES: BEGIN OF ty_final,
+         bsart      TYPE ekko-bsart,
+         lifnr      TYPE lfa1-lifnr,
+         ebeln      TYPE ekko-ebeln,
+         ebelp      TYPE ekpo-ebelp,
+         ematn      TYPE merep_outtab_purchdoc-ematn,
+         txz01      TYPE ekpo-txz01,
+         superfield TYPE merep_outtab_purchdoc-superfield,
+         werks      TYPE ekpo-werks,
+         bedat      TYPE merep_outtab_purchdoc-bedat,
+         menge      TYPE char16,
+         wtlief     TYPE char16,
+         meins      TYPE ekpo-meins,
+         slfdt      TYPE eket-slfdt,
+         no_of_days TYPE n,
+         status     TYPE char30,
+       END OF ty_final.
+
+DATA : lt_final TYPE TABLE OF ty_final,
+       ls_final TYPE ty_final,
+       lt_fcat  TYPE lvc_t_fcat.
+
+DATA :  w_email        TYPE string,
+        lv_temp        TYPE string,
+        wa_xstring     TYPE xstring,
+        lt_soli        TYPE soli_tab,
+        ls_soli        TYPE soli,
+        lo_mime_helper TYPE REF TO cl_gbt_multirelated_service,        "Class for combining HMTL & Image
+        l_subject      TYPE so_obj_des,
+        lo_doc_bcs     TYPE REF TO cl_document_bcs,
+        lo_bcs         TYPE REF TO cl_bcs,
+        lo_sender      TYPE REF TO if_sender_bcs,
+        lo_recipient   TYPE REF TO if_recipient_bcs.
+
+DATA : selpa TYPE RANGE OF t160t-selpa.
+
+DATA(lt_final2) = lt_final.
+
+*---------------------------------------------------------*
+*                    SELECTION-SCREEN
+*---------------------------------------------------------*
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-001.
+
+SELECT-OPTIONS : s_bsart FOR ekko-bsart OBLIGATORY,
+                 s_bukrs FOR t001-bukrs OBLIGATORY,
+                 s_matnr FOR mara-matnr,
+                 s_werks FOR t001w-werks OBLIGATORY.
+
+SELECTION-SCREEN END OF BLOCK b1.
+
+
+*---------------------------------------------------------*
+*                  START OF SELECTION
+*---------------------------------------------------------*
+
+
+*IF so_bsart[] IS INITIAL AND so_bukrs[] IS INITIAL AND so_werks[] IS INITIAL.
+*
+*  MESSAGE s000(zcom) WITH 'Please enter PO Doc Type or Company' 'Code or Plant to proceed further' DISPLAY LIKE 'E'.
+*  LEAVE LIST-PROCESSING.
+*
+*ENDIF.
+
+IF s_bsart[] IS NOT INITIAL AND s_bukrs[] IS NOT INITIAL AND s_werks[] IS NOT INITIAL.
+
+  REFRESH : selpa.
+
+  cl_salv_bs_runtime_info=>set( EXPORTING display  = abap_false
+                                          metadata = abap_true
+                                          data     = abap_true ).
+
+  APPEND VALUE #( sign = 'I' option = 'EQ' low = 'WE101'  ) TO selpa.
+
+  SUBMIT rm06en00 WITH listu = 'ALV'
+                  WITH selpa IN selpa
+                  WITH s_bsart IN s_bsart
+                  WITH s_matnr IN s_matnr
+                  WITH s_werks IN s_werks
+                  AND RETURN.
+
+  TRY.
+      cl_salv_bs_runtime_info=>get_data_ref(
+        IMPORTING r_data = go_data ).
+      ASSIGN go_data->* TO <gt_data>.
+    CATCH cx_salv_bs_sc_runtime_info ##NO_HANDLER.
+
+  ENDTRY.
+
+  cl_salv_bs_runtime_info=>clear_all( ).
+
+  "Move ME2N Report data into internal table
+  IF <gt_data> IS ASSIGNED.
+    LOOP AT <gt_data> ASSIGNING FIELD-SYMBOL(<fs_data>).
+      MOVE-CORRESPONDING <fs_data> TO ls_me2n.
+      APPEND ls_me2n TO lt_me2n.
+      CLEAR : ls_me2n.
+    ENDLOOP.
+  ENDIF.
+
+  CLEAR : ls_me2n, ls_final.
+  REFRESH : lt_final, lt_final2.
+
+  LOOP AT lt_me2n INTO ls_me2n.
+
+    MOVE-CORRESPONDING ls_me2n TO ls_final.
+    ls_final-lifnr =  |{ ls_me2n-superfield+0(10) ALPHA = IN }|.
+    APPEND ls_final TO lt_final.
+    CLEAR : ls_me2n, ls_final.
+
+  ENDLOOP.
+
+  lt_final2[] = lt_final.
+
+  REFRESH lt_final2[].
+
+  IF lt_final IS NOT INITIAL.
+
+    SELECT ebeln, ebelp, slfdt INTO TABLE @DATA(lt_eket)
+      FROM eket FOR ALL ENTRIES IN @lt_final
+      WHERE ebeln = @lt_final-ebeln
+      AND ebelp = @lt_final-ebelp.
+    IF sy-subrc = 0.
+      SORT lt_eket BY ebeln ebelp.
+    ENDIF.
+
+  ENDIF.
+
+  LOOP AT lt_final INTO DATA(w_final).
+
+    READ TABLE lt_eket INTO DATA(ls_eket) WITH KEY ebeln = w_final-ebeln ebelp = w_final-ebelp.
+    IF sy-subrc = 0.
+      w_final-slfdt = ls_eket-slfdt.
+    ENDIF.
+
+    APPEND w_final TO lt_final2.
+    CLEAR : w_final, ls_eket.
+
+  ENDLOOP.
+
+  REFRESH lt_final.
+  lt_final = lt_final2.
+
+  DELETE ADJACENT DUPLICATES FROM lt_final2 COMPARING lifnr.
+
+  IF lt_final2 IS NOT INITIAL.
+
+    SELECT lfa1~lifnr, lfa1~adrnr, adr6~smtp_addr
+      INTO TABLE @DATA(lt_email)
+      FROM lfa1 AS lfa1 INNER JOIN adr6 AS adr6
+      ON lfa1~adrnr = adr6~addrnumber
+      FOR ALL ENTRIES IN @lt_final2
+      WHERE lfa1~lifnr = @lt_final2-lifnr.
+
+    IF sy-subrc = 0.
+      SORT lt_email BY lifnr adrnr.
+    ENDIF.
+
+  ENDIF.
+
+  IF lt_final IS NOT INITIAL .
+
+    IF lt_email IS NOT INITIAL.
+      PERFORM send_email.
+    ENDIF.
+
+    TRY.
+        CALL METHOD cl_salv_table=>factory
+          EXPORTING
+            list_display = if_salv_c_bool_sap=>false
+          IMPORTING
+            r_salv_table = gr_table
+          CHANGING
+            t_table      = lt_final.
+
+      CATCH cx_salv_msg .
+
+    ENDTRY.
+
+*---Setting the Column Heading
+    gr_columns = gr_table->get_columns( ).
+
+    TRY.
+        l_column = gr_columns->get_column( 'STATUS' ).
+      CATCH cx_salv_not_found.
+    ENDTRY.
+    l_column->set_long_text( 'Email Status' ).
+    l_column->set_medium_text( 'Email Status' ).
+    l_column->set_short_text( 'Email St' ).
+
+    TRY.
+        l_column = gr_columns->get_column( 'MENGE' ).
+      CATCH cx_salv_not_found.
+    ENDTRY.
+    l_column->set_long_text( 'Quantity' ).
+    l_column->set_medium_text( 'Quantity' ).
+    l_column->set_short_text( 'Quantity' ).
+
+    TRY.
+        l_column = gr_columns->get_column( 'WTLIEF' ).
+      CATCH cx_salv_not_found.
+    ENDTRY.
+    l_column->set_long_text( 'To be delivered' ).
+    l_column->set_medium_text( 'To be delivered' ).
+    l_column->set_short_text( 'To be del.' ).
+
+    TRY.
+        l_column = gr_columns->get_column( 'SLFDT' ).
+      CATCH cx_salv_not_found.
+    ENDTRY.
+    l_column->set_long_text( 'Stat. Del. Date' ).
+    l_column->set_medium_text( 'Stat. Del. Date' ).
+    l_column->set_short_text( 'StatDelDt' ).
+
+    TRY.
+        l_column = gr_columns->get_column( 'NO_OF_DAYS' ).
+      CATCH cx_salv_not_found.
+    ENDTRY.
+    l_column->set_long_text( 'No of Days' ).
+    l_column->set_medium_text( 'No of Days' ).
+    l_column->set_short_text( 'No of Days' ).
+
+*---Setting the ALV toolbar
+    gr_functions = gr_table->get_functions( ).
+    gr_functions->set_all( abap_true ).
+
+*---Setting the Layout Save property
+    gr_columns->set_optimize( 'X' ).
+
+    gr_layout = gr_table->get_layout( ).
+
+    IF set_key-report IS INITIAL.
+      set_key-report = sy-repid.
+    ENDIF.
+
+*---Setting the Default Layout
+
+    gr_layout->set_key( set_key ).
+    gr_layout->set_save_restriction( cl_salv_layout=>restrict_none ).
+    gr_layout->set_initial_layout( set_lay ).
+
+*---Displaying the ALV
+    gr_table->display( ).
+
+  ELSE.
+
+    MESSAGE 'No Data Found to be displayed' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+
+  ENDIF.
+
+ENDIF.
+
+FORM send_email.
+
+  DATA : lv_subject TYPE so_obj_des,
+         lo_sender  TYPE REF TO if_sender_bcs VALUE IS INITIAL.
+
+  FIELD-SYMBOLS: <fs_data> TYPE ANY TABLE.
+
+  SORT lt_final BY lifnr ebeln ebelp.
+  SORT lt_email BY lifnr.
+  break itcor.
+  LOOP AT lt_final INTO DATA(ls_final).
+
+    DATA(lt_final2) = lt_final.
+    DATA(ls_final2) = ls_final.
+    DATA(lt_email2) = lt_email.
+
+    DELETE lt_email2 WHERE lifnr NE ls_final-lifnr.
+
+    IF lt_email2 IS NOT INITIAL.
+
+*   Create HTML Mail Body Content
+      AT NEW lifnr.
+
+        REFRESH lt_soli[].
+        ls_final = ls_final2.
+
+        DELETE lt_final2 WHERE lifnr NE ls_final-lifnr.
+
+        PERFORM add_line USING : '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-template/2.1/">',
+                                 '<head><style>',
+                                 'body {font-family: Verdana; font-size: 10px}',
+                                 'table,th,td {border: 1px solid black; border-collapse: collapse;}',
+                                 'table,th,td {font-family: Verdana; font-size: 10px;}',
+                                 '</style></head>',
+                                 '<body>',
+                                 '<font size="3" face="Calibri" color="black">',
+                                 '<p>Dear Supplier,</p>',
+                                 '<p>Attached is the list of pending orders, which as per our system are yet to be delivered by you.</p>',
+                                 '<p>Please urgently review the status at your end and inform us updated status in column K of the attached sheet.</p>',
+                                 '<p> * If material is already shipped, please share with us the shipping details such as shipping date , transporter , Vehicle and LR number</p>',
+                                 '<p> * If material is yet to be shipped urgently let us know the reason of delay and update with earliest possible shipment date. We need to inform our plant on top priority</p>',
+                                 '<p>Please update the status only in Column K of the excel sheet attached herewith. While sending the reply, please DO NOT change the subject of email or name of the excel file.</p>',
+                                 '<p>Also request you to send the original Invoice along with the shipment.</p>',
+                                 '<p>Please send only Delivery Challan and Invoice Duplicate Copy for Transporter along with consignment.</p>',
+                                 '<p>Henceforth we encourage you to proactively send the order confirmation and shipping date in advance.</p>'.
+
+        PERFORM add_line USING : '<table><tr><th>PO Type</th>',
+                                  '<th>Purchasing Document</th>',
+                                  '<th>Item</th>',
+                                  '<th>Material</th>',
+                                  '<th>Short Text</th>',
+                                  '<th>Vendor/Supplying Plant</th>',
+                                  '<th>Plant</th>',
+                                  '<th>Docu. Date</th>',
+                                  '<th>Quantity</th>',
+                                  '<th>To be delivered</th>',
+                                  '<th>Order Unit</th>',
+                                  '<th>Stat. Del. Date</th>',
+                                  '<th>No of Days</th>',
+                                  '<th>Status</th>',
+                                  '</tr>'.
+      ENDAT.
+
+      PERFORM add_line USING : '<tr>'.
+
+      CONCATENATE '<td>' ls_final-bsart '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-ebeln '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-ebelp '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      ls_final-ematn = |{ ls_final-ematn ALPHA = OUT }|.
+      CONCATENATE '<td>' ls_final-ematn '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-txz01 '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-superfield '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-werks '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-menge '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-wtlief '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-meins '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-slfdt '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-no_of_days '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      CONCATENATE '<td>' ls_final-status '</td>' INTO lv_temp.
+      PERFORM add_line USING lv_temp.
+
+      PERFORM add_line USING : '</tr>'.
+
+
+      AT END OF lifnr.
+
+        ls_final = ls_final2.
+
+        DATA(vend_name) = ls_final-superfield.
+        DATA : attachment_subject  TYPE sood-objdes.
+
+        PERFORM add_line USING : '</table>',
+                                 '<p>Thanks & Regards,</p>',
+                                 '<p>GBSS Supply Chain</p>',
+                                 '</font></body></html>'.
+        TRY .
+
+*   Create main HTML body
+            CREATE OBJECT lo_mime_helper.
+
+            CALL METHOD lo_mime_helper->set_main_html
+              EXPORTING
+                content     = lt_soli
+                filename    = 'sapwebform.htm'     "Filename for HMTL form
+                description = 'Alert'.   "Title
+
+*   Create HTML using BCS class and attach html and image part to it.
+
+            CONCATENATE 'URGENT !!! Reminder - Need delivery status of Piramal Order -' vend_name
+            INTO l_subject SEPARATED BY space.
+
+            lo_doc_bcs = cl_document_bcs=>create_from_multirelated(
+                              i_subject  = l_subject
+                              i_multirel_service = lo_mime_helper ).
+
+            lo_bcs = cl_bcs=>create_persistent( ).
+
+            GET REFERENCE OF lt_final2 INTO DATA(lo_final_ref).
+            ASSIGN lo_final_ref->* TO <fs_data>.
+
+            TRY.
+                cl_salv_table=>factory(
+                  IMPORTING r_salv_table = DATA(lo_table)
+                  CHANGING  t_table      = <fs_data> ).
+
+                lt_fcat = cl_salv_controller_metadata=>get_lvc_fieldcatalog(
+                                         r_columns  = lo_table->get_columns( )
+                                r_aggregations = lo_table->get_aggregations( ) ).
+
+                READ TABLE lt_fcat ASSIGNING FIELD-SYMBOL(<fs_fcat>) WITH KEY fieldname = 'SUPERFIELD'.
+                <fs_fcat>-reptext = 'Vendor/Supplying Plant'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'EBELN'.
+                <fs_fcat>-reptext = 'Purchasing Document'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'EBELP'.
+                <fs_fcat>-reptext = 'Item No'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'EMATNR'.
+                <fs_fcat>-reptext = 'Material Number'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'TXZ01'.
+                <fs_fcat>-reptext = 'Short text'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'MENGE'.
+                <fs_fcat>-reptext = 'Quantity'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'MEINS'.
+                <fs_fcat>-reptext = 'Order Unit'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'WERKS'.
+                <fs_fcat>-reptext = 'Plant'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'WTLIEF'.
+                <fs_fcat>-reptext = 'To be delivered'.
+
+                READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'STATUS'.
+                <fs_fcat>-reptext = 'Status'.
+
+                DATA(lo_result) =
+                  cl_salv_ex_util=>factory_result_data_table(
+                    r_data         = lo_final_ref
+                    t_fieldcatalog = lt_fcat ).
+
+                cl_salv_bs_tt_util=>if_salv_bs_tt_util~transform(
+                  EXPORTING
+                    xml_type      = if_salv_bs_xml=>c_type_xlsx
+                    xml_version   = cl_salv_bs_a_xml_base=>get_version( )
+                    r_result_data = lo_result
+                    xml_flavour   = if_salv_bs_c_tt=>c_tt_xml_flavour_export
+                    gui_type      = if_salv_bs_xml=>c_gui_type_gui
+                  IMPORTING
+                    xml           = wa_xstring ).
+
+              CATCH cx_root.
+                CLEAR wa_xstring.
+            ENDTRY.
+
+*   Create Attachement
+
+            attachment_subject = vend_name.
+
+            lo_doc_bcs->add_attachment(
+                i_attachment_type    = 'xls'
+                i_attachment_size    = CONV #( xstrlen( wa_xstring ) )
+                i_attachment_subject = attachment_subject
+                i_attachment_header  = VALUE #( ( line = 'Vendor PO Report.xlsx' ) )
+                i_att_content_hex    = cl_bcs_convert=>xstring_to_solix( wa_xstring )
+             ).
+
+*   Create Document
+            lo_bcs->set_document( i_document = lo_doc_bcs ).
+
+*   Set sender
+            lo_sender = cl_sapuser_bcs=>create( sy-uname ).
+
+            lo_bcs->set_sender(
+              EXPORTING
+                i_sender = lo_sender ).
+
+*   Create Recipient
+            LOOP AT lt_email2 INTO DATA(ls_email2).
+              lo_recipient = cl_cam_address_bcs=>create_internet_address( i_address_string = ls_email2-smtp_addr  ).
+              lo_bcs->add_recipient( i_recipient = lo_recipient ).
+            ENDLOOP.
+
+            lo_bcs->set_send_immediately( 'X' ).
+            lo_bcs->send( ).
+
+            COMMIT WORK AND WAIT.
+
+          CATCH cx_root.
+
+        ENDTRY.
+
+      ENDAT.
+
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+
+
+FORM add_line USING fv_val TYPE string.
+  CLEAR ls_soli.
+  ls_soli = fv_val.
+  APPEND ls_soli TO lt_soli.
+ENDFORM.
