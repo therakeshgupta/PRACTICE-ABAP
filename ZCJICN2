@@ -1,0 +1,1065 @@
+*&---------------------------------------------------------------------*
+*& Report  ZCJIC_REPORT_N2
+*& Copied from Report ZCJIC_REPORT_N
+*&---------------------------------------------------------------------*
+* Created by          : Rakesh Gupta
+* Creation Date       : 29.11.2022
+* Work Order Number   : 3339
+* Request Number      : DEVK974938 / DEVK975461 / DEVK975625 / DEVK975702
+*&---------------------------------------------------------------------*
+* Modified by         : Rakesh Gupta
+* Modification Date   : 04.04.2023
+* Work Order Number   : 4030
+* Request Number      : DEVK976266
+*&---------------------------------------------------------------------*
+* Modified by         : Rakesh Gupta
+* Modification Date   : 18.05.2023
+* Work Order Number   : 4153
+* Request Number      : DEVK976533
+*&---------------------------------------------------------------------*
+* Modified by         : Rakesh Gupta
+* Modification Date   : 31.07.2023
+* Work Order Number   : 4306
+* Request Number      : DEVK976805
+* Change Description  : Date Calculation Bug Fix
+*&---------------------------------------------------------------------*
+
+
+REPORT zcjic_report_n2.
+TYPE-POOLS : slis.
+TABLES : imak, prps_r, anla, prps.
+
+DATA i_program_name         TYPE sy-repid.
+DATA i_structure_name       TYPE dd02l-tabname.
+DATA input  TYPE prps-psphi.
+DATA output TYPE string.
+
+DATA : ct_fieldcat TYPE slis_t_fieldcat_alv,
+       it_fieldcat TYPE lvc_t_fcat,
+       wa_fieldcat LIKE LINE OF ct_fieldcat.
+DATA : gd_layout   TYPE slis_layout_alv.
+DATA : lr_cust_data TYPE REF TO data.
+DATA : v_index TYPE sy-tabix,
+       v_count TYPE sy-tabix.
+FIELD-SYMBOLS <lt_cust_data> TYPE ANY TABLE.
+FIELD-SYMBOLS <lt_cust_data_f> TYPE ANY TABLE.
+FIELD-SYMBOLS <lw_cust_data> TYPE any.
+
+TYPES : BEGIN OF ty_anla,
+          anln1 TYPE anla-anln1,
+          posnr TYPE anla-posnr,
+        END OF ty_anla.
+
+TYPES : BEGIN OF ty_final.
+        INCLUDE STRUCTURE kaep_coac.
+TYPES : wbs      TYPE anla-posnr,
+        anln1    TYPE anla-anln1,
+        cer_no   TYPE imak-posid,
+        fdatu    TYPE char10,
+        wtges    TYPE bpge-wtges,
+        buck1    TYPE bpge-wtges, "string,
+        buck2    TYPE bpge-wtges, "string,
+        buck3    TYPE bpge-wtges, "string,
+        buck4    TYPE bpge-wtges, "string.
+***Begin of addition by Rakesh for WO # 3339 on 29.11.2022
+        vbukr    TYPE proj-vbukr,
+        vgsbr    TYPE proj-vgsbr,
+        prctr    TYPE proj-prctr,
+        usr00    TYPE char20,
+        usr08    TYPE char10,
+        usr09    TYPE char10,
+        rep_date TYPE char10.
+*        plan_ageing   TYPE int4,
+*        plan_ageing_d TYPE int4.
+***End of addition by Rakesh for WO # 3339 on 29.11.2022
+TYPES         END OF ty_final.
+************************Added by Siddhesh S for WO - *******************************
+TYPES : BEGIN OF ty_summary,
+          cer_no   TYPE imak-posid,
+          anbres   TYPE kaep_coac-anbres,
+          wkgres   TYPE kaep_coac-wkgres,
+          buck1    TYPE bpge-wtges, "string,
+          buck2    TYPE bpge-wtges, "string,
+          buck3    TYPE bpge-wtges, "string,
+          buck4    TYPE bpge-wtges, "string.
+          vbukr    TYPE proj-vbukr,
+          vgsbr    TYPE proj-vgsbr,
+          prctr    TYPE proj-prctr,
+          usr08    TYPE char10,
+          usr09    TYPE char10,
+          rep_date TYPE char10,
+        END OF ty_summary.
+DATA : it_sum TYPE TABLE OF ty_summary,
+       wa_sum TYPE  ty_summary.
+************************************************************************************
+DATA : it_final  TYPE STANDARD TABLE OF ty_final,
+       wa_final  TYPE ty_final,
+       wlt_final TYPE STANDARD TABLE OF ty_final,
+       it_anla   TYPE TABLE OF ty_anla,
+       wa_anla   TYPE ty_anla.
+DATA : lv_imav   TYPE imav,
+       lv_cor_no TYPE imav-posnr.
+DATA : lv_posnr TYPE anla-posnr,
+       lv_days  TYPE p DECIMALS 6,     ""Changed by  Rakesh for WO # 4306 on 07.07.2023
+       lv_year  TYPE p DECIMALS 6.     ""Changed by  Rakesh for WO # 4306 on 07.07.2023
+
+***Begin of addition by Rakesh for WO # 3339 on 20.01.2023
+DATA : lr_posid TYPE RANGE OF prps-posid.
+***End of addition by Rakesh for WO # 3339 on 20.01.2023
+
+***Begin of addition by Rakesh for WO # 4306 on 07.07.2023
+DATA: rs_variant LIKE disvariant.
+DATA nof4 TYPE c.
+***End of addition by Rakesh for WO # 4306 on 07.07.2023
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-001.
+SELECT-OPTIONS :
+*                 s_pspnr FOR prps-pspnr,
+               cn_pspnr FOR prps_r-posid
+               MODIF  ID pro
+               MEMORY ID pro
+               MATCHCODE OBJECT prp NO INTERVALS , "Vinutha WO 3339
+***Begin of Addition by Rakesh for WO # 3339 on 20.01.2023.
+               s_pbukr FOR prps-pbukr NO INTERVALS NO-EXTENSION,
+               s_pgsbr FOR prps-pgsbr NO INTERVALS,
+***End of Addition by Rakesh for WO # 3339 on 20.01.2022.
+               s_posid FOR  prps-psphi. ""imak-posid. "Changed by Rakesh for WO # 4030 on 04.04.2023
+*               s_anln1 FOR anla-anln1.   ""Commented by Rakesh for WO # 3339 on 25.01.2023
+PARAMETERS  : p_dat TYPE sy-datum.        " Added by Rakesh for WO # 3339 on 20.12.2022.
+PARAMETERS  : pa_vari TYPE slis_vari.     " Added by Rakesh for WO #  on 20.12.2022.
+
+*************************Added by Siddhesh S for WO - ******************************************************
+PARAMETERS : r1 RADIOBUTTON GROUP g1 USER-COMMAND ab,
+             r2 RADIOBUTTON GROUP g1 DEFAULT 'X'.
+************************************************************************************************************
+SELECTION-SCREEN END OF BLOCK b1.
+
+* insertion by Vinutha for WO 3339
+*Multiple WBS restrict range and exclude options
+DATA: restrict TYPE sscr_restrict,
+      optlist  TYPE sscr_opt_list,
+      ass      TYPE sscr_ass.
+
+INITIALIZATION.
+  optlist-name = 'OBJECTKEY1'.
+  optlist-options-eq = 'X'.
+  APPEND optlist TO restrict-opt_list_tab.
+
+  ass-kind = 'S'.
+  ass-name = 'CN_PSPNR'.
+  ass-sg_main = 'I'.
+  ass-sg_addy = space.
+  ass-op_main = 'OBJECTKEY1'.
+  APPEND ass TO restrict-ass_tab.
+
+  CALL FUNCTION 'SELECT_OPTIONS_RESTRICT'
+    EXPORTING
+*     PROGRAM                = PROGRAM
+      restriction            = restrict
+*     DB                     = ' '
+    EXCEPTIONS
+      too_late               = 1
+      repeated               = 2
+      selopt_without_options = 3
+      selopt_without_signs   = 4
+      invalid_sign           = 5
+      empty_option_list      = 6
+      invalid_kind           = 7
+      repeated_kind_a        = 8
+      OTHERS                 = 9.
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+*End of insertion by Vinutha for WO # 3339
+
+***Begin of addition by Rakesh for WO# 4306 on 07.07.2023 11:18:42
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pa_vari.
+  PERFORM alv_variant_f4 CHANGING pa_vari.
+***End of addition by Rakesh for WO# 4306 on 07.07.2023 11:18:42
+
+************************Added by Siddhesh S for WO - **********************************************
+AT SELECTION-SCREEN OUTPUT.
+
+  LOOP AT SCREEN.
+    IF r1 IS NOT INITIAL.
+      IF screen-group1 = 'PRO'.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ELSEIF r2 IS NOT INITIAL.
+      IF screen-group1 = 'PRO'.
+        screen-active = 1.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+***************************************************************************************************
+START-OF-SELECTION.
+
+***Begin of addition by Rakesh for WO # 3339 on 20.01.2023
+  IF s_posid IS NOT INITIAL.
+    IF s_pbukr IS INITIAL OR s_pgsbr IS INITIAL.
+      MESSAGE 'Please enter Company Code & Business Area' TYPE 'S' DISPLAY LIKE 'E'.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+  ELSEIF cn_pspnr IS INITIAL AND s_pbukr IS INITIAL AND s_pgsbr IS INITIAL.
+    MESSAGE 'Please Enter WBS Element or Combination of Company Code & Business Area' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ELSEIF cn_pspnr IS INITIAL AND s_pbukr IS NOT INITIAL AND s_pgsbr IS INITIAL .
+    MESSAGE 'Please enter Business Area' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ELSEIF cn_pspnr IS INITIAL AND s_pbukr IS INITIAL AND s_pgsbr IS NOT INITIAL .
+    MESSAGE 'Please enter Company Code' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+
+  IF p_dat IS INITIAL.
+    MESSAGE 'Please enter date to proceed further' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+***Begin of comment by Rakesh for WO # 4030 on 04.04.2023
+**  ELSEIF p_dat = sy-datum.
+**    MESSAGE 'Date should be greater than todays date' TYPE 'S' DISPLAY LIKE 'E'.
+**    LEAVE LIST-PROCESSING.
+***End of comment by Rakesh for WO # 4030 on 04.04.2023
+  ENDIF.
+
+  IF s_pbukr IS NOT INITIAL AND s_pgsbr IS NOT INITIAL .
+    SELECT pspnr, posid, objnr, psphi, pbukr, pgsbr
+      FROM prps INTO TABLE @DATA(gt_wbs)
+      WHERE pbukr IN @s_pbukr
+        AND posid IN @cn_pspnr                      ""Added by Rakesh for WO # 3339 on 25.01.2023
+        AND pgsbr IN @s_pgsbr
+        AND psphi IN @s_posid
+        AND imprf <> @space.
+    IF sy-subrc = 0.
+      lr_posid = VALUE #( FOR <gt_wbs> IN gt_wbs
+                 ( sign = 'I'
+                   option = 'EQ'
+                   low = <gt_wbs>-posid
+                   high = space ) ).
+
+      IF cn_pspnr IS INITIAL.
+        cn_pspnr[] = lr_posid[].
+      ENDIF.
+
+    ENDIF.
+  ENDIF.
+
+***End of addition by Rakesh for WO # 3339 on 20.01.2023
+
+*Start of insertion by Vinutha for WO # 3339
+  SELECT pspnr, psphi, posid FROM prps INTO TABLE @DATA(wlt_prps)
+    WHERE posid IN @cn_pspnr
+      AND psphi IN @s_posid.      ""Added by Rakesh for WO # 3339 on 20.01.2023
+
+  DATA(wlt_psphi) = wlt_prps[].
+  SORT wlt_psphi ASCENDING BY psphi.
+  DATA(cn_pspnr_new) = cn_pspnr[].
+  DELETE ADJACENT DUPLICATES FROM wlt_psphi COMPARING psphi.
+  LOOP AT wlt_psphi INTO DATA(wls_psphi).
+    CLEAR: cn_pspnr_new[].
+    LOOP AT wlt_prps INTO DATA(wls_prps) WHERE psphi = wls_psphi-psphi.
+      READ TABLE cn_pspnr INTO DATA(wa_pspnr) WITH KEY low = wls_prps-posid.
+      IF sy-subrc = 0.
+        APPEND wa_pspnr TO cn_pspnr_new.
+      ENDIF.
+    ENDLOOP.
+*End of insertion 3339
+    cl_salv_bs_runtime_info=>set( EXPORTING display = abap_false
+    metadata = abap_true
+    data = abap_true ).
+*    SUBMIT zcjic_report WITH cn_pspnr IN cn_pspnr " Vinutha WO # 3339
+    SUBMIT zcjic_report WITH cn_pspnr IN cn_pspnr_new "Vinutha WO # 3339
+                        AND RETURN.
+    TRY.
+        cl_salv_bs_runtime_info=>get_data_ref( IMPORTING r_data = lr_cust_data ).
+        ASSIGN lr_cust_data->* TO <lt_cust_data>.
+        IF <lt_cust_data> IS ASSIGNED.         " Added by Rakesh for WO # 3339 on 05.01.2023
+          APPEND LINES OF <lt_cust_data> TO wlt_final.
+          FREE <lt_cust_data>.
+          UNASSIGN <lt_cust_data>.
+        ENDIF.
+        IF sy-subrc <> 0.
+*          MESSAGE : 'No data found' TYPE 'E'.
+          CONTINUE.
+        ENDIF.
+      CATCH cx_salv_bs_sc_runtime_info.
+*        MESSAGE 'Unable to retrieve ALV data' TYPE 'I'.
+    ENDTRY.
+  ENDLOOP.
+*BOI by vinutha for WO # 3339
+  IF wlt_final[] IS NOT INITIAL.
+    ASSIGN wlt_final TO <lt_cust_data>.
+  ELSE.
+    MESSAGE 'No data found' TYPE 'S' DISPLAY LIKE 'E'.
+    LEAVE LIST-PROCESSING.
+  ENDIF.
+*EOI by vinutha for WO # 3339
+
+  IF <lt_cust_data> IS NOT INITIAL.
+
+    LOOP AT <lt_cust_data> ASSIGNING <lw_cust_data>.
+
+      MOVE-CORRESPONDING <lw_cust_data> TO wa_final.
+
+      CALL FUNCTION 'CONVERSION_EXIT_ABPSP_INPUT'
+        EXPORTING
+          input     = wa_final-posid
+        IMPORTING
+          output    = lv_posnr
+        EXCEPTIONS
+          not_found = 1
+          OTHERS    = 2.
+      IF sy-subrc <> 0.
+* Implement suitable error handling here
+      ENDIF.
+
+      wa_final-wbs = lv_posnr.
+
+      SELECT SINGLE psphi FROM prps INTO @DATA(lv_psphi)
+        WHERE pspnr = @wa_final-wbs.
+      IF sy-subrc EQ 0.
+        wa_final-cer_no = lv_psphi.
+
+        input = wa_final-cer_no.
+
+        CALL FUNCTION 'CONVERSION_EXIT_KONPD_OUTPUT'
+          EXPORTING
+            input  = input
+          IMPORTING
+            output = output
+*           PSELT  = PSELT
+          .
+        wa_final-cer_no = output.
+
+      ENDIF.
+
+      SELECT SINGLE anln1 FROM anla INTO @DATA(lv_anln1)
+        WHERE posnr = @wa_final-wbs.
+      IF sy-subrc EQ 0.
+        wa_final-anln1 = lv_anln1.
+      ENDIF.
+
+      CALL FUNCTION 'CONVERSION_EXIT_REQNR_INPUT'
+        EXPORTING
+          input  = wa_final-cer_no
+        IMPORTING
+          output = lv_cor_no.
+
+
+      SELECT SINGLE * FROM imav INTO lv_imav
+         WHERE posnr = lv_cor_no.
+      IF sy-subrc EQ 0.
+*        wa_final-fdatu = lv_imav-fdatu.
+        CONCATENATE lv_imav-fdatu+6(2) lv_imav-fdatu+4(2) lv_imav-fdatu+0(4) INTO wa_final-fdatu SEPARATED BY '.'.
+      ENDIF.
+
+
+      SELECT SINGLE "objnr
+              wtges
+     INTO @DATA(lv_wtges)
+     FROM bpge
+*    FOR ALL ENTRIES IN i_imak[]
+     WHERE objnr = @lv_imav-objnr
+       AND trgkz = 'N'
+       AND wrttp = '39'.
+*       AND twaer = i_imak-waers.
+      IF sy-subrc EQ 0.
+        wa_final-wtges = lv_wtges.
+      ENDIF.
+
+      APPEND wa_final TO it_final.
+      CLEAR : wa_final.
+
+    ENDLOOP.
+**Begin of addition by Rakesh for WO # 3339 on 29.11.2022
+    DATA : lv_psphi1 TYPE string.
+    TYPES : BEGIN OF ty_prps3,
+              pspnr   TYPE prps-pspnr,
+              posid   TYPE prps-posid,
+              objnr   TYPE prps-objnr,
+              psphi   TYPE prps-psphi,
+              psphi_c TYPE char8,
+              usr08   TYPE prps-usr08,
+              usr09   TYPE prps-usr09,
+              usr00   TYPE prps-usr00,
+            END OF ty_prps3.
+    DATA : lt_prps3 TYPE STANDARD TABLE OF ty_prps3,
+           ls_prps3 TYPE ty_prps3.
+    REFRESH : lt_prps3.
+    SELECT pspnr, posid, objnr, psphi, usr00, usr08, usr09
+    INTO TABLE @DATA(lt_prps1)
+    FROM prps FOR ALL ENTRIES IN @it_final
+    WHERE posid = @it_final-posid.
+    IF sy-subrc = 0 AND lt_prps1 IS NOT INITIAL.
+
+      SELECT posid, objnr, psphi, usr00, usr08, usr09
+      INTO TABLE @DATA(lt_prps2)
+      FROM prps FOR ALL ENTRIES IN @lt_prps1
+      WHERE psphi = @lt_prps1-psphi.
+      SORT lt_prps2 BY objnr.     ""Added by Rakesh for WO#4030 on 05.04.2023.
+      IF sy-subrc = 0.
+        LOOP AT lt_prps1 INTO DATA(ls_prps_tmp).
+          CLEAR : lv_psphi1.
+          lv_psphi1 = ls_prps_tmp-psphi.
+          CALL FUNCTION 'CONVERSION_EXIT_KONPD_OUTPUT'
+            EXPORTING
+              input  = lv_psphi1
+            IMPORTING
+              output = lv_psphi1.
+          MOVE-CORRESPONDING ls_prps_tmp TO ls_prps3.
+          READ TABLE lt_prps2 INTO DATA(ls_prps0) WITH KEY posid = lv_psphi1.
+          IF sy-subrc = 0.
+            ls_prps3-usr00 = ls_prps0-usr00.
+          ENDIF.
+          ls_prps3-psphi_c = lv_psphi1.
+          READ TABLE lt_prps2 INTO DATA(ls_prps2) WITH KEY psphi = ls_prps_tmp-psphi.
+          IF sy-subrc = 0.
+            IF ls_prps2-usr08 NE '00000000'.
+              ls_prps3-usr08 = ls_prps2-usr08.
+            ENDIF.
+            IF ls_prps2-usr09 NE '00000000'.
+              ls_prps3-usr09 = ls_prps2-usr09.
+            ELSEIF ls_prps3-usr08 NE '00000000'.
+              ls_prps3-usr09 = ls_prps3-usr08.
+            ENDIF.
+
+            IF ls_prps3-usr08 = '00000000'.
+              SELECT SINGLE pspid, plsez FROM proj INTO @DATA(ls_proj1)
+              WHERE pspnr = @ls_prps3-psphi.
+*          IF sy-subrc = 0.                                       ""Commented by Rakesh for WO# 4030 on 04.04.2023
+              IF sy-subrc = 0 AND ls_proj1-plsez NE '00000000'.    ""Added by Rakesh for WO# 4030 on 04.04.2023
+                ls_prps3-usr08 = ls_proj1-plsez.
+                IF ls_prps3-usr09 = '00000000'.
+                  ls_prps3-usr09 = ls_proj1-plsez.
+                ENDIF.
+              ENDIF.
+            ENDIF.
+
+          ELSE.
+            ls_prps3-usr00 = ls_prps2-usr00.
+            SELECT SINGLE pspid, plsez FROM proj INTO @DATA(ls_proj)
+            WHERE pspid = @ls_prps3-psphi.
+*          IF sy-subrc = 0.                                     ""Commented by Rakesh for WO# 4030 on 04.04.2023
+            IF sy-subrc = 0 AND ls_proj-plsez NE '00000000'.    ""Added by Rakesh for WO# 4030 on 04.04.2023
+              ls_prps3-usr08 = ls_proj-plsez.
+              IF ls_prps3-usr09 NE '00000000'.
+                ls_prps3-usr09 = ls_proj-plsez.
+              ENDIF.
+            ENDIF.
+          ENDIF.
+          APPEND ls_prps3 TO lt_prps3.
+          CLEAR : ls_prps_tmp, ls_prps0, ls_prps3, ls_proj, ls_proj1.
+        ENDLOOP.
+      ENDIF.
+    ENDIF.
+
+    IF lt_prps3 IS NOT INITIAL.
+      SELECT pspnr, pspid, vbukr, vgsbr, prctr INTO TABLE @DATA(lt_proj2)
+        FROM proj FOR ALL ENTRIES IN @lt_prps3
+        WHERE pspnr = @lt_prps3-psphi.
+      IF sy-subrc NE 0.
+        REFRESH : lt_proj2.
+      ENDIF.
+    ENDIF.
+
+    DATA(lv_index) = 0.
+
+    LOOP AT it_final INTO DATA(ls_final).
+      lv_index = lv_index + 1.
+      READ TABLE lt_prps3 INTO ls_prps3 WITH KEY psphi_c = ls_final-cer_no.
+      IF sy-subrc = 0.
+        CLEAR : ls_final-usr00.
+        ls_final-usr00  = ls_prps3-usr00.
+*        ls_final-plan_ageing = ls_prps3-usr08 - sy-datum.
+*        IF p_dat IS NOT INITIAL.
+*          ls_final-plan_ageing_d = ls_prps3-usr08 - p_dat.
+*        ENDIF.
+        IF ls_prps3-usr08 NE '00000000'.
+          CONCATENATE ls_prps3-usr08+6(2) ls_prps3-usr08+4(2) ls_prps3-usr08+0(4) INTO ls_final-usr08 SEPARATED BY '.'.
+        ENDIF.
+        IF ls_prps3-usr09 NE '00000000'.
+          CONCATENATE ls_prps3-usr09+6(2) ls_prps3-usr09+4(2) ls_prps3-usr09+0(4) INTO ls_final-usr09 SEPARATED BY '.'.
+        ENDIF.
+      ELSE.
+        CLEAR : ls_final-usr00, ls_prps3.
+      ENDIF.
+
+      READ TABLE lt_proj2 INTO DATA(ls_proj2) WITH KEY pspid = ls_final-cer_no.
+      IF sy-subrc = 0.
+        CLEAR : ls_final-vbukr, ls_final-vgsbr, ls_final-prctr.
+        ls_final-vbukr = ls_proj2-vbukr.
+        ls_final-vgsbr = ls_proj2-vgsbr.
+        ls_final-prctr = ls_proj2-prctr.
+      ELSE.
+        CLEAR : ls_final-vbukr, ls_final-vgsbr, ls_final-prctr, ls_proj2.
+      ENDIF.
+
+      MODIFY it_final FROM ls_final INDEX lv_index.
+      CLEAR : ls_final, ls_prps3, ls_proj2.
+    ENDLOOP.
+
+***Begin of change by Rakesh for WO# 4153 on 18.05.2023
+**    CLEAR : ls_final, lv_index.
+**    LOOP AT it_final INTO ls_final.
+**      lv_index = lv_index + 1.
+**      IF ls_final-usr09 IS NOT INITIAL.
+**        IF ls_final-usr09 > ls_final-usr08.
+**          CONTINUE.
+**        ELSE.
+**          DELETE TABLE it_final FROM ls_final.
+**        ENDIF.
+**      ENDIF.
+**    ENDLOOP.
+
+    DATA : lv_date_usr08 TYPE dats,
+           lv_date_usr09 TYPE dats.
+
+    CLEAR : lv_date_usr08, lv_date_usr09, ls_final, lv_index.
+
+    LOOP AT it_final INTO ls_final.
+      lv_index = lv_index + 1.
+
+      CALL FUNCTION 'CONVERT_DATE_TO_INTERNAL'
+        EXPORTING
+          date_external = ls_final-usr08
+        IMPORTING
+          date_internal = lv_date_usr08.
+
+      CALL FUNCTION 'CONVERT_DATE_TO_INTERNAL'
+        EXPORTING
+          date_external = ls_final-usr09
+        IMPORTING
+          date_internal = lv_date_usr09.
+
+      IF lv_date_usr09 IS NOT INITIAL .
+        IF lv_date_usr09 GT lv_date_usr08.
+          CONTINUE.
+        ELSE.
+          DELETE it_final INDEX lv_index.
+        ENDIF.
+      ENDIF.
+      CLEAR : lv_date_usr08, lv_date_usr09, ls_final.
+    ENDLOOP.
+***End of change by Rakesh for WO# 4153 on 18.05.2023
+
+    DATA : lv_days2 TYPE p DECIMALS 6,     ""Changed by  Rakesh for WO # 4306 on 07.07.2023
+           lv_year2 TYPE p DECIMALS 6,     ""Changed by  Rakesh for WO # 4306 on 07.07.2023
+           lv_date  TYPE dats.
+
+    CLEAR : lv_index.
+
+    LOOP AT it_final INTO wa_final.
+
+      IF wa_final-usr09 IS NOT INITIAL.
+        CALL FUNCTION 'CONVERT_DATE_TO_INTERNAL'
+          EXPORTING
+            date_external = wa_final-usr09
+          IMPORTING
+            date_internal = lv_date.
+      ENDIF.
+
+      IF p_dat IS NOT INITIAL.
+
+        lv_days = lv_date - p_dat.
+        lv_year = lv_days / 365.
+
+      ENDIF.
+***Begin of Addition by Rakesh for WO# 4030 on 04.04.2023
+      IF lv_year LT 0 .
+        CLEAR : lv_year.
+      ENDIF.
+***End of Addition by Rakesh for WO# 4030 on 04.04.2023
+
+***      IF lv_year < 1.                   ""Commented by Rakesh for WO# 4030 on 04.04.2023
+      IF lv_year LE 1 AND lv_year NE 0.     ""Added by Rakesh for WO# 4030 on 04.04.2023
+        wa_final-buck1 = wa_final-buck1 + wa_final-anbres.
+      ENDIF.
+
+      IF lv_year GE 1 AND lv_year LT 2.
+        wa_final-buck2 = wa_final-buck2 + wa_final-anbres.
+      ENDIF.
+
+      IF lv_year GE 2 AND lv_year LT 3.
+        wa_final-buck3 = wa_final-buck3 + wa_final-anbres.
+      ENDIF.
+
+      IF lv_year GT 3.
+        wa_final-buck4 = wa_final-buck4 + wa_final-anbres.
+      ENDIF.
+
+      COLLECT wa_final INTO it_final.
+      CLEAR : wa_final, lv_year, lv_days, lv_date.
+
+    ENDLOOP.
+
+***End of addition by Rakesh for WO #  3339 on 29.11.2022
+
+    CLEAR v_index.
+    LOOP AT it_final INTO wa_final.
+      v_index = sy-tabix.
+      wa_final-anbres = wa_final-anbres / 2.
+      wa_final-wkgres = wa_final-wkgres / 2.
+      MODIFY it_final FROM wa_final INDEX v_index TRANSPORTING anbres wkgres.
+    ENDLOOP.
+
+  ENDIF.
+
+
+***Begin of Change by Rakesh for WO# 4030 on 04.04.2023
+
+  CLEAR : ls_final, lv_index.
+  LOOP AT it_final INTO ls_final.
+    lv_index = lv_index + 1.
+
+    CONCATENATE p_dat+6(2) p_dat+4(2) p_dat+0(4) INTO ls_final-rep_date  SEPARATED BY '.'.
+
+    IF ls_final-rep_date IS NOT INITIAL AND ls_final-rep_date NE '00000000'.
+      MODIFY it_final FROM ls_final INDEX lv_index.
+    ENDIF.
+  ENDLOOP.
+
+
+  DELETE it_final WHERE buck1 IS INITIAL AND buck2 IS INITIAL
+                    AND buck3 IS INITIAL AND buck4 IS INITIAL.
+
+**************************************Added by Siddhesh S for WO - ***************************
+  SORT it_final BY cer_no.
+  DATA(it_tem) = it_final[].
+  DELETE ADJACENT DUPLICATES FROM it_tem COMPARING cer_no.
+
+  LOOP AT it_tem INTO DATA(wa_tem).
+    READ TABLE it_final INTO wa_final WITH KEY cer_no = wa_tem-cer_no BINARY SEARCH.
+    IF sy-subrc = 0.
+      DATA(lv_inx) = sy-tabix.
+    ENDIF.
+    wa_sum-cer_no = wa_tem-cer_no.
+    wa_sum-prctr = wa_tem-prctr.
+    wa_sum-rep_date = wa_tem-rep_date.
+    wa_sum-usr08 = wa_tem-usr08.
+    wa_sum-usr09 = wa_tem-usr09.
+    wa_sum-vbukr = wa_tem-vbukr.
+    wa_sum-vgsbr = wa_tem-gsber.
+
+    LOOP AT it_final INTO wa_final FROM lv_inx.
+      IF wa_final-cer_no <> wa_tem-cer_no.
+        EXIT.
+      ENDIF.
+      wa_sum-wkgres = wa_sum-wkgres + wa_final-wkgres.
+      wa_sum-anbres = wa_final-anbres + wa_sum-anbres.
+      wa_sum-buck1 = wa_final-buck1 + wa_sum-buck1.
+      wa_sum-buck2 = wa_final-buck2 + wa_sum-buck2.
+      wa_sum-buck3 = wa_final-buck3 + wa_sum-buck3.
+      wa_sum-buck4 = wa_final-buck4 + wa_sum-buck4.
+    ENDLOOP.
+    APPEND wa_sum TO it_sum.
+    CLEAR wa_sum.
+    CLEAR wa_tem.
+  ENDLOOP.
+
+*****************************************************************************************************
+
+*  DELETE it_final WHERE cer_no NOT IN s_posid.
+*  DELETE it_final WHERE anln1  NOT IN s_anln1.
+***End of Change by Rakesh for WO# 4030 on 04.04.2023
+
+  i_structure_name = 'KAEP_COAC'.
+
+  CALL FUNCTION 'REUSE_ALV_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_program_name   = i_program_name
+*     I_INTERNAL_TABNAME           = I_INTERNAL_TABNAME
+      i_structure_name = i_structure_name
+*     I_CLIENT_NEVER_DISPLAY       = 'X'
+*     I_INCLNAME       = I_INCLNAME
+*     I_BYPASSING_BUFFER           = I_BYPASSING_BUFFER
+*     I_BUFFER_ACTIVE  = I_BUFFER_ACTIVE
+    CHANGING
+      ct_fieldcat      = ct_fieldcat
+*   EXCEPTIONS
+*     INCONSISTENT_INTERFACE       = 1
+*     PROGRAM_ERROR    = 2
+*     OTHERS           = 3
+    .
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+*  MOVE-CORRESPONDING ct_fieldcat TO it_fieldcat.
+
+  DESCRIBE TABLE ct_fieldcat LINES v_count.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'ANLN1'.
+  wa_fieldcat-seltext_l = 'Asset Code'.
+  wa_fieldcat-seltext_m = 'Asset Code'.
+  wa_fieldcat-seltext_s = 'Asset'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = 'C'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'CER_NO'.
+  wa_fieldcat-seltext_l = 'CER NO'.
+  wa_fieldcat-seltext_m = 'CER NO'.
+  wa_fieldcat-seltext_s = 'CER NO'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = 'C'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'FDATU'.
+  wa_fieldcat-seltext_l = 'Org Planned Completion Date'.
+  wa_fieldcat-seltext_m = 'Planned Completion Date'.
+  wa_fieldcat-seltext_s = 'Planned Date'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = 'C'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+*  v_count = v_count + 1.
+*  CLEAR wa_fieldcat.
+*  wa_fieldcat-col_pos = v_count.
+*  wa_fieldcat-fieldname = 'WTGES'.
+*  wa_fieldcat-seltext_l = 'Budget Amount'.
+*  wa_fieldcat-seltext_m = 'Budget Amount'.
+*  wa_fieldcat-seltext_s = 'Budget Amt'.
+*  wa_fieldcat-datatype  = 'CURR'.
+*  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+*  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'BUCK1'.
+  wa_fieldcat-seltext_l = 'Less than 1 Year'.
+  wa_fieldcat-seltext_m = 'Less than 1 Year'.
+  wa_fieldcat-seltext_s = 'Less than 1 Year'.
+  wa_fieldcat-datatype  = 'CURR'.
+  wa_fieldcat-inttype   = ' '.
+  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'BUCK2'.
+  wa_fieldcat-seltext_l = '1-2 years'.
+  wa_fieldcat-seltext_m = '1-2 years'.
+  wa_fieldcat-seltext_s = '1-2 years'.
+  wa_fieldcat-datatype  = 'CURR'.
+  wa_fieldcat-inttype   = ' '.
+  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'BUCK3'.
+  wa_fieldcat-seltext_l = '2-3 years'.
+  wa_fieldcat-seltext_m = '2-3 years'.
+  wa_fieldcat-seltext_s = '2-3 years'.
+  wa_fieldcat-datatype  = 'CURR'.
+  wa_fieldcat-inttype   = ' '.
+  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'BUCK4'.
+  wa_fieldcat-seltext_l = 'More than 3 years'.
+  wa_fieldcat-seltext_m = 'More than 3 years'.
+  wa_fieldcat-seltext_s = 'More than 3 years'.
+  wa_fieldcat-datatype  = 'CURR'.
+  wa_fieldcat-inttype   = ' '.
+  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+***Begin of addition by Rakesh for WO # 3339 on 29.11.2022
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'VBUKR'.
+  wa_fieldcat-seltext_l = 'Company Code'.
+  wa_fieldcat-seltext_m = 'Company Code'.
+  wa_fieldcat-seltext_s = 'Company Code'.
+  wa_fieldcat-datatype  = 'VBUKR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'VGSBR'.
+  wa_fieldcat-seltext_l = 'Business Area'.
+  wa_fieldcat-seltext_m = 'Business Area'.
+  wa_fieldcat-seltext_s = 'Business Area'.
+  wa_fieldcat-datatype  = 'VGSBR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'PRCTR'.
+  wa_fieldcat-seltext_l = 'Profit Center'.
+  wa_fieldcat-seltext_m = 'Profit Center'.
+  wa_fieldcat-seltext_s = 'Profit Center'.
+  wa_fieldcat-datatype  = 'PRCTR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'USR00'.
+  wa_fieldcat-seltext_l = 'Remarks'.
+  wa_fieldcat-seltext_m = 'Remarks'.
+  wa_fieldcat-seltext_s = 'Remarks'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'USR08'.
+  wa_fieldcat-seltext_l = 'Due Date'.
+  wa_fieldcat-seltext_m = 'Due Date'.
+  wa_fieldcat-seltext_s = 'Due Date'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'USR09'.
+  wa_fieldcat-seltext_l = 'Completion Date'.
+  wa_fieldcat-seltext_m = 'Completion Date'.
+  wa_fieldcat-seltext_s = 'Completion Date'.
+  wa_fieldcat-datatype  = 'CHAR'.
+  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+
+  v_count = v_count + 1.
+  CLEAR wa_fieldcat.
+  wa_fieldcat-col_pos = v_count.
+  wa_fieldcat-fieldname = 'REP_DATE'.
+  wa_fieldcat-seltext_l = 'Report Run Date'.
+  wa_fieldcat-seltext_m = 'Report Run Date'.
+  wa_fieldcat-seltext_s = 'Report Run Date'.
+  wa_fieldcat-datatype  = 'CHAR'.
+*  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+  APPEND wa_fieldcat TO ct_fieldcat.
+*
+*  v_count = v_count + 1.
+*  CLEAR wa_fieldcat.
+*  wa_fieldcat-col_pos = v_count.
+*  wa_fieldcat-fieldname = 'PLAN_AGEING_D'.
+*  wa_fieldcat-seltext_l = 'Ageing Based on Comp. Date'.
+*  wa_fieldcat-seltext_m = 'Ageing Based on Comp. Date'.
+*  wa_fieldcat-seltext_s = 'Ageing Based on Comp. Date'.
+*  wa_fieldcat-datatype  = 'INT4'.
+**  wa_fieldcat-inttype   = ' '.
+*  wa_fieldcat-do_sum    = 'X'.
+*  APPEND wa_fieldcat TO ct_fieldcat.
+
+***End of addition by Rakesh for WO # 3339 on 29.11.2022
+
+  CLEAR v_index.
+  LOOP AT ct_fieldcat INTO wa_fieldcat.
+    v_index = sy-tabix.
+    wa_fieldcat-no_out = space.
+    IF wa_fieldcat-fieldname = 'WKGRES' OR wa_fieldcat-fieldname = 'ANBRES'.
+      wa_fieldcat-do_sum    = 'X'.
+    ENDIF.
+    MODIFY ct_fieldcat FROM wa_fieldcat INDEX v_index TRANSPORTING no_out do_sum.
+  ENDLOOP.
+
+  CLEAR v_index.
+  LOOP AT ct_fieldcat INTO wa_fieldcat.
+    v_index = sy-tabix.
+    IF wa_fieldcat-fieldname <> 'KSTAR'   AND
+       wa_fieldcat-fieldname <> 'ANLN1'   AND
+       wa_fieldcat-fieldname <> 'CER_NO'  AND
+       wa_fieldcat-fieldname <> 'FDATU'   AND
+       wa_fieldcat-fieldname <> 'WTGES'   AND
+       wa_fieldcat-fieldname <> 'POSID'   AND
+       wa_fieldcat-fieldname <> 'BUDAT'   AND
+       wa_fieldcat-fieldname <> 'GJAHR'   AND
+       wa_fieldcat-fieldname <> 'REFBN'   AND
+       wa_fieldcat-fieldname <> 'WKGRES'  AND
+       wa_fieldcat-fieldname <> 'ANBRES'  AND
+       wa_fieldcat-fieldname <> 'EBELN'   AND
+       wa_fieldcat-fieldname <> 'EBTXT'   AND
+       wa_fieldcat-fieldname <> 'SGTXT'   AND
+       wa_fieldcat-fieldname <> 'MEGBTR'  AND
+       wa_fieldcat-fieldname <> 'MEINB'   AND
+       wa_fieldcat-fieldname <> 'BUCK1'   AND
+       wa_fieldcat-fieldname <> 'BUCK2'   AND
+       wa_fieldcat-fieldname <> 'BUCK3'   AND
+       wa_fieldcat-fieldname <> 'BUCK4'
+      .
+      wa_fieldcat-no_out = 'X'.
+    ENDIF.
+    MODIFY ct_fieldcat FROM wa_fieldcat INDEX v_index TRANSPORTING no_out.
+  ENDLOOP.
+
+  gd_layout-colwidth_optimize = 'X'.
+  cl_salv_bs_runtime_info=>set( EXPORTING display = abap_true
+  metadata = abap_true
+  data = abap_true ).
+  IF r2 IS NOT INITIAL.
+***Begin of addition by Rakesh for WO # 4030 on 04.04.2023
+    IF it_final[] IS NOT INITIAL.
+      CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+        EXPORTING
+          it_fieldcat        = ct_fieldcat[]
+*         it_fieldcat_lvc    = it_fieldcat[]
+          i_default          = 'X'
+          i_save             = 'A'
+          is_variant         = rs_variant
+          i_callback_program = sy-repid
+*         i_callback_top_of_page = 'TOP_OF_PAGE'
+          is_layout          = gd_layout
+        TABLES
+          t_outtab           = it_final[]
+        EXCEPTIONS
+          program_error      = 1
+          OTHERS             = 2.
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      ENDIF.
+    ELSE.
+      MESSAGE 'No Overdue Project' TYPE 'I' DISPLAY LIKE 'S'.
+    ENDIF.
+*************************Added by Siddhesh S for WO - *************************************
+  ELSEIF r1 IS NOT INITIAL.
+    DATA : lo_salv TYPE REF TO cl_salv_table.
+    TRY.
+        cl_salv_table=>factory(
+*      EXPORTING
+*        list_display   = list_display    " ALV Displayed in List Mode
+*        r_container    = r_container    " Abstract Container for GUI Controls
+*        container_name = container_name
+          IMPORTING
+            r_salv_table   = lo_salv    " Basis Class Simple ALV Tables
+          CHANGING
+            t_table        = it_sum
+        ).
+
+      CATCH cx_salv_msg.   "
+        MESSAGE 'ALV display not possible' TYPE 'I' DISPLAY LIKE 'E'.
+    ENDTRY.
+    DATA : lo_colums TYPE REF TO cl_salv_columns_table.
+    DATA lo_col TYPE REF TO cl_salv_column.
+
+    lo_colums = lo_salv->get_columns( ).
+    TRY.
+        lo_col = lo_colums->get_column( 'REP_DATE' ).
+        lo_col->set_medium_text( 'Report Run Date' ).
+        lo_col->set_output_length( '15' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'USR08' ).
+        lo_col->set_medium_text( 'Due Date' ).
+        lo_col->set_output_length( '15' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'USR09' ).
+        lo_col->set_medium_text( 'Completion Date' ).
+        lo_col->set_output_length( '15' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'BUCK4' ).
+        lo_col->set_medium_text( 'More than 3 years' ).
+        lo_col->set_output_length( '15' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'BUCK3' ).
+        lo_col->set_medium_text( '2-3 years' ).
+        lo_col->set_short_text( '2-3 years' ).
+        lo_col->set_long_text( '2-3 years' ).
+        lo_col->set_output_length( '12' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'BUCK2' ).
+        lo_col->set_medium_text( '1-2 years' ).
+        lo_col->set_short_text( '1-2 years' ).
+        lo_col->set_long_text( '1-2 years' ).
+        lo_col->set_output_length( '12' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    TRY.
+        lo_col = lo_colums->get_column( 'BUCK1' ).
+        lo_col->set_medium_text( 'Less than 1 Year' ).
+        lo_col->set_output_length( '15' ).
+      CATCH cx_salv_not_found.  "
+    ENDTRY.
+    DATA : lo_fun TYPE REF TO cl_salv_functions.
+    lo_fun = lo_salv->get_functions( ).
+    lo_fun->set_all( 'X' ).
+    lo_salv->display( ).
+  ENDIF.
+*********************************************************************************************
+***End of addition by Rakesh for WO # 4030 on 04.04.2023
+
+***Begin of addition by Rakesh for WO # 4306 on 07.07.2023
+*&---------------------------------------------------------------------*
+*&      Form  ALV_VARIANT_F4
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      <--P_PA_VARI  text
+*----------------------------------------------------------------------*
+FORM alv_variant_f4  CHANGING pa_vari.
+
+  CLEAR nof4.
+  LOOP AT SCREEN.
+    IF screen-name = 'PA_VARI'.
+      IF screen-input = 0.
+        nof4 = 'X'.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  rs_variant-report   = sy-repid.
+  rs_variant-username = sy-uname.
+  CALL FUNCTION 'REUSE_ALV_VARIANT_F4'
+    EXPORTING
+      is_variant = rs_variant
+      i_save     = 'A'
+    IMPORTING
+      es_variant = rs_variant
+    EXCEPTIONS
+      OTHERS     = 1.
+  IF sy-subrc = 0 AND nof4 EQ space.
+    pa_vari = rs_variant-variant.
+  ENDIF.
+
+ENDFORM.
+
+***End of addition by Rakesh for WO # 4306 on 07.07.2023
