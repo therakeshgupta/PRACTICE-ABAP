@@ -1,0 +1,218 @@
+**&---------------------------------------------------------------------*
+**&  Include           ZSD_UPL_ECOM_SO_CREATE_TOP
+**&---------------------------------------------------------------------*
+TABLES: sscrfields.
+
+TYPES:
+
+  BEGIN OF ty_excel_out,
+    port_ord  TYPE char35,
+    port_date TYPE char20,
+    werks     TYPE zcode_mstr-zcode_value,
+    ship_to   TYPE kna1-kunnr,
+    matnr     TYPE mara-matnr,
+    charg     TYPE vbap-charg,
+    zmeng     TYPE vbap-zmeng,
+    meins     TYPE vbap-meins,
+    rate      TYPE konv-kwert,
+    ware_cust TYPE char12,
+    ware_inv  TYPE char35,
+  END OF ty_excel_out,
+
+  BEGIN OF ty_fields,
+    field TYPE dd03l-fieldname,
+  END OF ty_fields,
+
+  BEGIN OF ty_file_upload,
+    data TYPE string,
+  END OF ty_file_upload,
+
+  BEGIN OF ty_ecom_po,
+    ecom_po TYPE zec_data-ecom_po,
+    werks   TYPE zec_data-werks,  "Santosh CI# INC0105527
+  END OF ty_ecom_po,
+
+  BEGIN OF ty_werks,
+    werks TYPE zcode_mstr-zcode_cmmt,
+  END OF ty_werks,
+
+  BEGIN OF ty_sold_to,
+    zcode_fldname TYPE zcode_mstr-zcode_fldname,
+    zcode_value   TYPE knvv-kunnr,
+    zcode_cmmt    TYPE knvv-vwerk,
+    zcode_cmmt_1  TYPE zcode_mstr-zcode_cmmt_1,
+  END OF ty_sold_to,
+
+  BEGIN OF ty_po_div,
+    ecom_po TYPE zec_data-ecom_po,
+    werks   TYPE zec_data-werks,  "Santosh CI# INC0105527
+    spart   TYPE mara-spart,
+  END OF ty_po_div,
+
+  BEGIN OF ty_dlv,
+    ecom_po  TYPE zec_data-ecom_po,
+    werks    TYPE zec_data-werks,   "Santosh CI# INC0105527
+    vbeln_va TYPE zec_data-vbeln_va,
+    vbeln_vl TYPE zec_data-vbeln_vl,
+  END OF ty_dlv,
+
+  BEGIN OF ty_pgi,
+    ecom_po  TYPE zec_data-ecom_po,
+    werks    TYPE zec_data-werks,    "Santosh CI# INC0105527
+    vbeln_va TYPE zec_data-vbeln_va,
+    vbeln_vl TYPE zec_data-vbeln_vl,
+    mblnr    TYPE zec_data-mblnr,
+  END OF ty_pgi,
+
+  BEGIN OF ty_inv,
+    ecom_po  TYPE zec_data-ecom_po,
+    werks    TYPE zec_data-werks,    "Santosh CI# INC0105527
+    vbeln_va TYPE zec_data-vbeln_va,
+    vbeln_vl TYPE zec_data-vbeln_vl,
+    mblnr    TYPE zec_data-mblnr,
+    vbeln_vf TYPE zec_data-vbeln_vf,
+  END OF ty_inv,
+
+*  BEGIN OF ty_vbap,
+*    vbeln  TYPE vbap-vbeln,
+*    posnr  TYPE vbap-posnr,
+*    matnr  TYPE vbap-matnr,
+*    charg  TYPE vbap-charg,
+*    kwmeng TYPE vbap-kwmeng,
+*  END OF ty_vbap,
+
+  BEGIN OF ty_lips,
+    vbeln TYPE lips-vbeln,
+    posnr TYPE lips-posnr,
+    matnr TYPE lips-matnr,
+    charg TYPE lips-charg,
+    lfimg TYPE lips-lfimg,
+  END OF ty_lips,
+
+  BEGIN OF ty_mseg,
+    mblnr TYPE mseg-mblnr,
+    mjahr TYPE mseg-mjahr,
+    zeile TYPE mseg-zeile,
+    matnr TYPE mseg-matnr,
+    charg TYPE mseg-charg,
+    menge TYPE mseg-menge,
+  END OF ty_mseg,
+
+  BEGIN OF ty_vbrp,
+    vbeln TYPE vbrp-vbeln,
+    posnr TYPE vbrp-posnr,
+    matnr TYPE vbrp-matnr,
+    charg TYPE vbrp-charg,
+    fkimg TYPE vbrp-fkimg,
+  END OF ty_vbrp.
+
+
+DATA: i_file_table  TYPE STANDARD TABLE OF file_info,
+      r_werks       TYPE RANGE OF zcode_mstr-zcode_value,
+      it_excel_out  TYPE TABLE OF ty_excel_out,
+      wa_excel_out  TYPE ty_excel_out,
+      it_fieldnames TYPE TABLE OF ty_fields,
+      wa_field      TYPE ty_fields,
+      i_file_data   TYPE TABLE OF ty_file_upload,
+      w_file_data   TYPE ty_file_upload,
+      i_files       TYPE TABLE OF salfldir,
+      i_ec_file     TYPE TABLE OF zec_file,
+      w_ec_file     TYPE zec_file,
+      i_ec_raw      TYPE TABLE OF zec_raw,
+      w_ec_raw      TYPE zec_raw,
+      i_ec_raw_tmp  TYPE TABLE OF zec_raw,
+      i_ec_mast     TYPE TABLE OF zec_data,
+      gt_vbfa       TYPE TABLE OF vbfa,         "MOD01(+)
+      i_ec_mast_tmp TYPE TABLE OF zec_data,
+      w_ec_mast     TYPE zec_data,
+      i_ecom_po     TYPE TABLE OF ty_ecom_po,
+      i_werks       TYPE TABLE OF ty_werks,
+      i_sold_to     TYPE TABLE OF ty_sold_to,
+      w_sold_to     TYPE ty_sold_to,
+      i_ec_log      TYPE TABLE OF zec_log,
+      w_ec_log      TYPE zec_log,
+      i_po_div      TYPE TABLE OF ty_po_div,
+      w_po_div      TYPE ty_po_div,
+      i_dlv         TYPE TABLE OF ty_dlv,
+      w_dlv         TYPE ty_dlv,
+      i_pgi         TYPE TABLE OF ty_pgi,
+      w_pgi         TYPE ty_dlv,
+      i_inv         TYPE TABLE OF ty_inv,
+      w_inv         TYPE ty_inv,
+*      i_vbap        TYPE TABLE OF ty_vbap,
+      i_lips        TYPE TABLE OF ty_lips,
+      i_mseg        TYPE TABLE OF ty_mseg,
+      i_vbrp        TYPE TABLE OF ty_vbrp.
+
+DATA: lv_msg          TYPE string,
+      lv_data         TYPE string,
+      fname           TYPE string,
+      name            TYPE pfeflnamel,
+      len             TYPE i,
+      lv_count        TYPE i,
+      w_files         TYPE salfldir,
+      sourcepath      TYPE sapb-sappfad,
+      targetpath      TYPE sapb-sappfad,
+      filename        TYPE string,
+      lv_split1       TYPE string,
+      lv_split2       TYPE string,
+      lv_split3       TYPE string,
+      lv_split4       TYPE string,
+      lv_file_count   TYPE i,
+      wa_xstring      TYPE xstring,
+      lv_xls_file(15) VALUE 'Report.xlsx',
+      w_item_no       TYPE i,
+      w_item_no2      TYPE i,
+      g_sales_ord     TYPE vbak-vbeln,
+      g_delivery      TYPE likp-vbeln,
+      g_pgidoc        TYPE vbfa-vbeln,
+      g_invoice       TYPE vbrk-vbeln,
+      g_fguid         TYPE guid_16,
+      g_guid          TYPE guid_16,
+      g_guid2         TYPE guid_16,
+      g_msg           TYPE char100,
+      g_filename      TYPE zec_file-filename.
+
+FIELD-SYMBOLS: <fs_ec_mast> TYPE zec_data.
+
+*Order Declarations
+DATA: w_ord_head_in  TYPE  bapisdhd1,
+      w_ord_head_inx TYPE  bapisdhd1x,
+      i_ord_itm_in   TYPE TABLE OF bapisditm,
+      w_ord_itm_in   TYPE  bapisditm,
+      i_ord_itm_inx  TYPE TABLE OF bapisditmx,
+      w_ord_itm_inx  TYPE  bapisditmx,
+      i_ord_part     TYPE TABLE OF bapiparnr,
+      w_ord_part     TYPE  bapiparnr,
+      i_ord_schd_in  TYPE TABLE OF bapischdl,
+      w_ord_schd_in  TYPE  bapischdl,
+      i_ord_schd_inx TYPE TABLE OF bapischdlx,
+      w_ord_schd_inx TYPE  bapischdlx,
+      i_ord_cond_in  TYPE TABLE OF bapicond,
+      w_ord_cond_in  TYPE  bapicond,
+      i_ord_cond_inx TYPE TABLE OF bapicondx,
+      w_ord_cond_inx TYPE  bapicondx,
+      w_testrun      TYPE bapiflag-bapiflag,
+      i_ret_ord      TYPE TABLE OF bapiret2,
+      w_ret_ord      TYPE bapiret2.
+
+*Delivery declarations
+DATA:
+  i_dlvref  TYPE TABLE OF bapidlvreftosalesorder,
+  w_dlvref  TYPE bapidlvreftosalesorder,
+  i_ret_dlv TYPE TABLE OF bapiret2,
+  w_ret_dlv TYPE bapiret2.
+
+*PGI Declarations
+DATA:
+  w_pgidata   TYPE vbkok,
+  i_vbpok_tab TYPE TABLE OF vbpok,
+  w_vbpok_tab TYPE vbpok,
+  i_prot      TYPE STANDARD TABLE OF prott.
+
+*Invoice Declarations
+DATA:
+  w_billingdata TYPE bapivbrk,
+  i_billingdata TYPE STANDARD TABLE OF bapivbrk,
+  i_return_bill TYPE STANDARD TABLE OF bapiret1,
+  i_success     TYPE STANDARD TABLE OF bapivbrksuccess.
