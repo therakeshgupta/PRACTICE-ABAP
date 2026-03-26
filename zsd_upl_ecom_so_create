@@ -1,0 +1,1939 @@
+*&---------------------------------------------------------------------*
+* Created by          : Santosh Lingamallu
+* Created On          : 25.04.2024
+* Functional          : Santosh Rawat, Ameeth Jadiyaal
+* Request No.         : DEVK978241
+* Work Order No       : 4856
+* CCF                 : 242541
+* Description         : This report will perform OTC Cycle for ECOM Orders in SAP.
+*&---------------------------------------------------------------------*
+* Modified by         : Mahendra Ujirpuriya
+* Functional          : Vaishnavi Shelke
+* Modification Date   : 12.06.2025
+* Correction Number   : MOD01
+* Work Order          : INC0124457
+* Request Number      : DEVK981549
+* Description         : Bug fix for billing and delivery document
+*----------------------------------------------------------------------*
+
+REPORT zsd_upl_ecom_so_create.
+
+INCLUDE zsd_upl_ecom_so_create_top.
+
+SELECTION-SCREEN:  BEGIN OF BLOCK b1 WITH FRAME TITLE text-003.
+SELECTION-SCREEN BEGIN OF LINE.
+PARAMETERS: rb1 RADIOBUTTON GROUP rbg MODIF ID mid USER-COMMAND rad DEFAULT 'X'.
+SELECTION-SCREEN COMMENT 3(20) text-004 MODIF ID mid.
+PARAMETERS: rb2 RADIOBUTTON GROUP rbg MODIF ID mid.
+SELECTION-SCREEN COMMENT 27(20) text-005 MODIF ID mid.
+SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN END OF BLOCK b1.
+
+SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE text-001.
+PARAMETERS : p_fpath1 TYPE string MODIF ID f1, "rlgrap-filename
+             p_fpath2 TYPE rlgrap-filename MODIF ID f2. " DEFAULT '/usr/sap/DEV/wareiq/out/ORDERS/'.
+SELECTION-SCREEN END OF BLOCK b2.
+
+SELECTION-SCREEN:  BEGIN OF BLOCK b3 WITH FRAME TITLE text-002.
+SELECTION-SCREEN PUSHBUTTON 01(4) icon1 USER-COMMAND cmd1 MODIF ID but.
+SELECTION-SCREEN: END OF BLOCK b3.
+
+INITIALIZATION.
+  p_fpath2 = '/usr/sap/' && sy-sysid && '/wareiq/out/ORDERS/'.
+
+*--------------------------------------------------------------------------*
+*At selection-screen output.                                                *
+*--------------------------------------------------------------------------*
+AT SELECTION-SCREEN OUTPUT.
+  icon1 = icon_export.
+  IF rb1 IS NOT INITIAL.
+    LOOP AT SCREEN.
+      IF screen-group1 = 'F2'.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDLOOP.
+  ELSEIF rb2 IS NOT INITIAL.
+    LOOP AT SCREEN.
+      IF screen-group1 = 'F1'.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+
+*--------------------------------------------------------------------------*
+*At selection-screen output.                                                *
+*--------------------------------------------------------------------------*
+**** Upload File From Local
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_fpath1.
+
+  CALL METHOD cl_gui_frontend_services=>directory_browse
+    CHANGING
+      selected_folder      = p_fpath1
+    EXCEPTIONS
+      cntl_error           = 1
+      error_no_gui         = 2
+      not_supported_by_gui = 3
+      OTHERS               = 4.
+
+  IF sy-subrc <> 0.
+    MESSAGE e000(zcom) WITH 'Error Occured! Please choose correct folder'.
+  ELSE.
+    CALL METHOD cl_gui_cfw=>flush( ).
+  ENDIF.
+
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_fpath2.
+*Browse Application Server Directory
+  CALL FUNCTION '/SAPDMC/LSM_F4_SERVER_FILE'
+    EXPORTING
+      directory        = '.'
+    IMPORTING
+      serverfile       = p_fpath2
+    EXCEPTIONS
+      canceled_by_user = 1
+      OTHERS           = 2.
+
+AT SELECTION-SCREEN.
+  CASE sscrfields-ucomm.
+    WHEN 'CMD1'.
+      PERFORM cmd1_excel.
+  ENDCASE.
+
+START-OF-SELECTION.
+
+  IF rb1 IS NOT INITIAL AND p_fpath1 IS INITIAL.
+    MESSAGE s000(zcom) WITH 'Please enter path' DISPLAY LIKE 'E'.
+    EXIT.
+  ELSEIF rb2 IS NOT INITIAL AND p_fpath2 IS INITIAL.
+    MESSAGE s000(zcom) WITH 'Please enter path' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  PERFORM validate_filename.
+  PERFORM raw_data_upload.
+  PERFORM send_mail USING i_ec_file.
+  PERFORM validate_data.
+  PERFORM create_docs.
+  MESSAGE 'Please check ZECOM02 report for status' TYPE 'S'.
+
+FORM cmd1_excel.
+
+  DATA: t_filetab TYPE filetable.
+  DATA: w_filetab LIKE LINE OF t_filetab.
+  DATA: v_filename TYPE string.
+  DATA: v_rc TYPE i.
+
+  REFRESH: it_excel_out,it_fieldnames.
+  CLEAR wa_field.
+
+  wa_field = 'Portal Order #'.              APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Portal Order Date(YYYYMMDD)'. APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Plant'.                       APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Ship-to-Party'.               APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Material'.                    APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Batch'.                       APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Quantity'.                    APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'UoM'.                         APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'Rate'.                        APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'WareIQ Customer Code'.        APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+  wa_field = 'WareIQ Invoice'.              APPEND wa_field TO it_fieldnames. CLEAR: wa_field.
+
+  wa_excel_out-port_ord   = '100'.
+  wa_excel_out-port_date  = '20220401'.
+  wa_excel_out-werks      = '4332'.
+  wa_excel_out-ship_to    = '0025001119'.
+  wa_excel_out-matnr      = '400127007'.
+  wa_excel_out-charg      = '1000003284'.
+  wa_excel_out-zmeng      = '100'.
+  wa_excel_out-meins      = 'ECH'.
+  wa_excel_out-rate       = '1000'.
+  wa_excel_out-ware_cust  = 'A1234567'.
+  wa_excel_out-ware_inv   = 'INV0001'.
+
+  APPEND wa_excel_out TO it_excel_out.
+  CLEAR wa_excel_out.
+
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    CHANGING
+      file_table = t_filetab
+      rc         = v_rc.
+  READ TABLE t_filetab INTO w_filetab INDEX 1.
+  v_filename = w_filetab-filename.
+  CONCATENATE v_filename '.txt' INTO v_filename.
+  IF NOT v_filename IS INITIAL.
+
+    CALL METHOD cl_gui_frontend_services=>gui_download
+      EXPORTING
+        filename              = v_filename
+        fieldnames            = it_fieldnames
+        write_field_separator = 'X'
+      CHANGING
+        data_tab              = it_excel_out.
+  ELSE.
+    MESSAGE 'Action Denied' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+
+FORM raw_data_upload.
+
+  DATA: w_ec_file TYPE zec_file.
+  DATA: lv_head(20) TYPE c.
+
+  IF rb1 = 'X'.
+
+    LOOP AT i_ec_file ASSIGNING FIELD-SYMBOL(<fs_ec_file>) WHERE fstatus = ''.
+
+      filename = p_fpath1 && '\' && <fs_ec_file>-filename.
+
+      CALL FUNCTION 'GUI_UPLOAD'
+        EXPORTING
+          filename                = filename
+          filetype                = 'ASC'
+          has_field_separator     = 'X'
+        TABLES
+          data_tab                = i_file_data
+        EXCEPTIONS
+          file_open_error         = 1
+          file_read_error         = 2
+          no_batch                = 3
+          gui_refuse_filetransfer = 4
+          invalid_type            = 5
+          no_authority            = 6
+          unknown_error           = 7
+          bad_data_format         = 8
+          header_not_allowed      = 9
+          separator_not_allowed   = 10
+          header_too_long         = 11
+          unknown_dp_error        = 12
+          access_denied           = 13
+          dp_out_of_memory        = 14
+          disk_full               = 15
+          dp_timeout              = 16
+          OTHERS                  = 17.
+
+      IF sy-subrc NE 0.
+        MESSAGE e000(zcom) WITH 'Error in opening the file'.
+      ENDIF.
+
+      DELETE i_file_data WHERE data IS INITIAL.
+
+      LOOP AT i_file_data INTO w_file_data.
+*Exclude Header. Header should be in first row. If Header found at other row, file will be ignored.
+        lv_head = CONV #( w_file_data-data ).
+        CONDENSE lv_head NO-GAPS.
+        TRANSLATE lv_head TO UPPER CASE.
+        IF sy-tabix EQ 1 AND lv_head+0(13) = 'PORTALORDER#|'.
+          CONTINUE.
+        ELSEIF sy-tabix EQ 1 AND lv_head+0(13) NE 'PORTALORDER#|'.
+          <fs_ec_file>-fstatus = 'FAILED'.
+          <fs_ec_file>-remarks = 'Invalid Header Position'.
+          CLEAR i_ec_raw_tmp.
+          EXIT.
+        ENDIF.
+        IF sy-tabix NE 1 AND lv_head+0(13) = 'PORTALORDER#|'.
+          <fs_ec_file>-fstatus = 'FAILED'.
+          <fs_ec_file>-remarks = 'Invalid Header Position'.
+          CLEAR i_ec_raw_tmp.
+          EXIT.
+        ENDIF.
+
+        w_ec_raw-fguid = <fs_ec_file>-fguid.
+        CALL FUNCTION 'GUID_CREATE'
+          IMPORTING
+            ev_guid_16 = w_ec_raw-rguid.
+
+        CONDENSE w_file_data-data NO-GAPS.
+        w_ec_raw-rdata = w_file_data-data.
+        SPLIT w_file_data-data AT '|' INTO
+                w_ec_raw-ecom_po
+                w_ec_raw-ecom_po_date
+                w_ec_raw-werks
+                w_ec_raw-kunwe
+                w_ec_raw-matnr
+                w_ec_raw-charg
+                w_ec_raw-zmeng
+                w_ec_raw-meins
+                w_ec_raw-rate
+                w_ec_raw-ecom_cust
+                w_ec_raw-ecom_inv.
+
+        w_ec_raw-erdat = sy-datum.
+        w_ec_raw-erzet = sy-uzeit.
+        w_ec_raw-ernam = sy-uname.
+
+*Only PO number is changed to upper case, this will help in reporting.
+        TRANSLATE w_ec_raw-ecom_po TO UPPER CASE.
+
+        APPEND w_ec_raw TO i_ec_raw_tmp.
+        CLEAR: w_file_data, w_ec_raw.
+      ENDLOOP.
+      IF i_ec_raw_tmp IS NOT INITIAL.
+        APPEND LINES OF i_ec_raw_tmp TO i_ec_raw.
+        <fs_ec_file>-fstatus = 'UPLOADED'.
+        CLEAR i_ec_raw_tmp.
+      ELSE.
+        IF <fs_ec_file>-remarks IS INITIAL. "Header validation is happening above. If value filled there no need to fill here.
+          <fs_ec_file>-fstatus = 'FAILED'.
+          <fs_ec_file>-remarks = 'No entries in file'.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    MODIFY zec_raw FROM TABLE i_ec_raw.
+    MODIFY zec_file FROM TABLE i_ec_file.
+    COMMIT WORK.
+
+  ELSEIF rb2 = 'X'.
+
+    LOOP AT i_ec_file ASSIGNING <fs_ec_file> WHERE fstatus = '' AND
+                                                   filename+0(3) = 'SO_'.
+
+      CONCATENATE name <fs_ec_file>-filename INTO fname.
+
+      OPEN DATASET fname FOR INPUT IN TEXT MODE ENCODING DEFAULT.
+
+      CHECK ( sy-subrc = 0 ).
+
+      DO.
+        READ DATASET fname INTO lv_data.
+        IF sy-subrc EQ 0.
+
+*Exclude Header. Header should be in first row. If Header found at other row file will be ignored.
+          lv_head = CONV #( lv_data ).
+          CONDENSE lv_head NO-GAPS.
+          TRANSLATE lv_head TO UPPER CASE.
+          IF sy-index EQ 1 AND lv_head+0(13) = 'PORTALORDER#|'.
+            CONTINUE.
+          ELSEIF sy-index EQ 1 AND lv_head+0(13) NE 'PORTALORDER#|'.
+            <fs_ec_file>-fstatus = 'FAILED'.
+            <fs_ec_file>-remarks = 'Invalid Header Position'.
+            CLEAR i_ec_raw_tmp.
+            EXIT.
+          ENDIF.
+          IF sy-index NE 1 AND lv_head+0(13) = 'PORTALORDER#|'.
+            <fs_ec_file>-fstatus = 'FAILED'.
+            <fs_ec_file>-remarks = 'Invalid Header Position'.
+            CLEAR i_ec_raw_tmp.
+            EXIT.
+          ENDIF.
+
+          w_ec_raw-fguid = <fs_ec_file>-fguid.
+
+          CALL FUNCTION 'GUID_CREATE'
+            IMPORTING
+              ev_guid_16 = w_ec_raw-rguid.
+
+          CONDENSE lv_data NO-GAPS.
+          w_ec_raw-rdata = lv_data.
+
+          REPLACE ALL OCCURRENCES OF cl_abap_char_utilities=>cr_lf(1) IN lv_data WITH ''.
+
+          FIND ALL OCCURRENCES OF '|' IN lv_data MATCH COUNT lv_count.
+          SPLIT lv_data AT '|' INTO w_ec_raw-ecom_po
+                                    w_ec_raw-ecom_po_date
+                                    w_ec_raw-werks
+                                    w_ec_raw-kunwe
+                                    w_ec_raw-matnr
+                                    w_ec_raw-charg
+                                    w_ec_raw-zmeng
+                                    w_ec_raw-meins
+                                    w_ec_raw-rate
+                                    w_ec_raw-ecom_cust
+                                    w_ec_raw-ecom_inv.
+
+          w_ec_raw-erdat = sy-datum.
+          w_ec_raw-erzet = sy-uzeit.
+          w_ec_raw-ernam = sy-uname.
+
+*Only PO number is changed to upper case, this will help in reporting.
+          TRANSLATE w_ec_raw-ecom_po TO UPPER CASE.
+
+          APPEND w_ec_raw TO i_ec_raw_tmp.
+          CLEAR : w_ec_raw.
+        ELSE.
+          EXIT.
+        ENDIF.
+      ENDDO.
+      CLOSE DATASET fname.
+      IF i_ec_raw_tmp IS NOT INITIAL.
+        APPEND LINES OF i_ec_raw_tmp TO i_ec_raw.
+        <fs_ec_file>-fstatus = 'UPLOADED'.
+        CLEAR i_ec_raw_tmp.
+      ELSE.
+        IF <fs_ec_file>-remarks IS INITIAL. "Header validation is happening above. If value filled there no need to fill here.
+          <fs_ec_file>-fstatus = 'FAILED'.
+          <fs_ec_file>-remarks = 'No Entries in file'.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    MODIFY zec_raw FROM TABLE i_ec_raw.
+    MODIFY zec_file FROM TABLE i_ec_file.
+    COMMIT WORK.
+
+*File Archive
+    LOOP AT i_files INTO w_files WHERE name+0(3) = 'SO_'.
+
+      CONCATENATE name w_files-name INTO fname.
+      sourcepath = fname.
+      CONCATENATE name 'archive/'  w_files-name INTO targetpath.
+
+      CALL FUNCTION 'ARCHIVFILE_SERVER_TO_SERVER'
+        EXPORTING
+          sourcepath       = sourcepath
+          targetpath       = targetpath
+        EXCEPTIONS
+          error_file       = 1
+          no_authorization = 2
+          OTHERS           = 3.
+
+      IF sy-subrc EQ 0.
+        DELETE DATASET fname.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_FILE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM validate_filename.
+
+  SELECT 'I' AS sign,
+         'EQ' AS option,
+         zcode_value AS low
+    FROM zcode_mstr
+    INTO TABLE @r_werks
+    WHERE zcode_fldname = 'WAREIQ'.
+
+  IF rb1 = 'X'.
+
+    IF p_fpath1 IS NOT INITIAL.
+      CALL METHOD cl_gui_frontend_services=>directory_list_files   "This method is Case Insensitive.
+        EXPORTING
+          directory                   = p_fpath1
+          filter                      = 'SO_*.txt'
+          files_only                  = 'X'
+        CHANGING
+          file_table                  = i_file_table
+          count                       = lv_file_count
+        EXCEPTIONS
+          cntl_error                  = 1
+          directory_list_files_failed = 2
+          wrong_parameter             = 3
+          error_no_gui                = 4
+          not_supported_by_gui        = 5
+          OTHERS                      = 6.
+
+      IF sy-subrc <> 0.
+        MESSAGE 'Error in selecting file' TYPE 'E'.
+      ELSEIF i_file_table IS INITIAL.
+        MESSAGE 'No Files Found' TYPE 'E'.
+      ENDIF.
+    ENDIF.
+
+    LOOP AT i_file_table ASSIGNING FIELD-SYMBOL(<fs_file_table>).
+      PERFORM createfilename USING <fs_file_table>-filename.
+    ENDLOOP.
+
+    IF i_ec_file IS NOT INITIAL.
+      INSERT zec_file FROM TABLE i_ec_file.
+      COMMIT WORK.
+    ENDIF.
+
+  ELSEIF rb2 = 'X'.
+    name = p_fpath2.
+    len = strlen( name ).
+    len = len - 1.
+    IF name+len(1) NE '/'.
+      CONCATENATE name '/' INTO name.
+    ENDIF.
+
+    CALL FUNCTION 'RZL_READ_DIR_LOCAL'
+      EXPORTING
+        name     = name
+      TABLES
+        file_tbl = i_files.
+
+    LOOP AT i_files ASSIGNING FIELD-SYMBOL(<fs_files>).
+*Unable to read file if filename is changed to upper case in AIX OS.
+*      TRANSLATE <fs_files>-name TO UPPER CASE.
+      CHECK <fs_files>-name+0(3) = 'SO_'.
+      PERFORM createfilename USING <fs_files>-name.
+    ENDLOOP.
+
+    IF i_ec_file IS NOT INITIAL.
+      INSERT zec_file FROM TABLE i_ec_file.
+      COMMIT WORK.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CREATEFILENAME
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_LV_FILENAME  text
+*----------------------------------------------------------------------*
+FORM createfilename USING p_lv_filename.
+
+  DATA:
+    lv_file_exist TYPE bool,
+    lv_date       TYPE sy-datum,
+    lv_remarks    TYPE zec_file-remarks,
+    lv_filename   TYPE zec_file-filename.
+
+
+  CLEAR: w_ec_file, lv_file_exist, lv_date, lv_split1, lv_split2, lv_split3, lv_split4.
+
+*  lv_filename = p_lv_filename.
+*  TRANSLATE lv_filename TO UPPER CASE.
+
+  SELECT SINGLE @abap_true FROM zec_file
+    INTO @lv_file_exist
+    WHERE filename = @p_lv_filename.
+
+  CALL FUNCTION 'GUID_CREATE'
+    IMPORTING
+      ev_guid_16 = w_ec_file-fguid.
+
+  w_ec_file-filename = p_lv_filename.
+  w_ec_file-erdat = sy-datum.
+  w_ec_file-erzet = sy-uzeit.
+  w_ec_file-ernam = sy-uname.
+
+  SPLIT p_lv_filename AT '_' INTO lv_split1 lv_split2 lv_split3 lv_split4.
+  lv_date = CONV #( lv_split3 ).
+
+  CALL FUNCTION 'DATE_CHECK_PLAUSIBILITY'
+    EXPORTING
+      date                      = lv_date
+    EXCEPTIONS
+      plausibility_check_failed = 1
+      OTHERS                    = 2.
+
+  IF sy-subrc NE 0.
+    w_ec_file-fstatus = 'FAILED'.
+    CONCATENATE w_ec_file-remarks 'Invalid Date,' INTO w_ec_file-remarks SEPARATED BY space.
+    CONDENSE w_ec_file-remarks.
+  ELSE.
+    w_ec_file-filedate = lv_date.
+    IF lv_date GT sy-datum.
+      w_ec_file-fstatus = 'FAILED'.
+      CONCATENATE w_ec_file-remarks 'Future Date,' INTO w_ec_file-remarks SEPARATED BY space.
+      CONDENSE w_ec_file-remarks.
+    ENDIF.
+  ENDIF.
+
+  IF lv_split2 NOT IN r_werks[].
+    w_ec_file-fstatus = 'FAILED'.
+    CONCATENATE w_ec_file-remarks 'Invalid Plant,' INTO w_ec_file-remarks SEPARATED BY space.
+    CONDENSE w_ec_file-remarks.
+  ENDIF.
+
+  IF lv_file_exist = 'X'.
+    w_ec_file-fstatus = 'FAILED'.
+    CONCATENATE w_ec_file-remarks 'Duplicate File,' INTO w_ec_file-remarks SEPARATED BY space.
+    CONDENSE w_ec_file-remarks.
+  ENDIF.
+
+  IF w_ec_file-remarks IS NOT INITIAL.
+    DATA(lv_len) = strlen( w_ec_file-remarks ).
+    DATA(lv_last) = lv_len - 1.
+    TRY.
+        IF w_ec_file-remarks+lv_last(lv_last) = ','.
+          w_ec_file-remarks+lv_last(lv_last) = ''.
+        ENDIF.
+      CATCH cx_root INTO DATA(o_root).
+    ENDTRY.
+    CONDENSE w_ec_file-remarks.
+  ENDIF.
+
+  APPEND w_ec_file TO i_ec_file.
+  CLEAR w_ec_file.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SEND_MAIL
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_I_EC_FILE  text
+*----------------------------------------------------------------------*
+FORM send_mail USING p_i_ec_file.
+
+  DATA lv_subject TYPE so_obj_des.
+
+  TRY.
+      "Create send request
+      DATA(lo_send_request) = cl_bcs=>create_persistent( ).
+
+      "Create mail body
+      DATA(lt_body) = VALUE bcsy_text(
+                        ( line = 'Dear Recipient,' ) ( )
+                        ( line = 'Please find below attachment for uploaded details:.' )
+                        ( line = 'Thank You.' )
+                      ).
+
+      lv_subject = |ECOM Order upload status in SAP|.
+
+      "Set up document object
+      DATA(lo_document) = cl_document_bcs=>create_document(
+                            i_type = 'RAW'
+                            i_text = lt_body
+                            i_subject = lv_subject ).
+
+      PERFORM prepare_attachment CHANGING wa_xstring.
+
+      "Add attachment
+      lo_document->add_attachment(
+          i_attachment_type    = 'xls'
+          i_attachment_size    = CONV #( xstrlen( wa_xstring ) )
+          i_attachment_subject = 'Upload Details'
+          i_attachment_header  = VALUE #( ( line = 'Report.xlsx' ) )
+          i_att_content_hex    = cl_bcs_convert=>xstring_to_solix( wa_xstring )
+       ).
+
+      "Add document to send request
+      lo_send_request->set_document( lo_document ).
+
+*Set Sender
+      DATA: lo_sender TYPE REF TO if_sender_bcs VALUE IS INITIAL.
+      lo_sender = cl_sapuser_bcs=>create( sy-uname ). "sender is the logged in user
+      lo_send_request->set_sender(
+      EXPORTING
+      i_sender = lo_sender ).
+
+      SELECT SINGLE zcode_value FROM zcode_mstr
+        INTO @DATA(lv_recepient) WHERE zcode_fldname = 'ZECOM01_MAILID'.
+
+      "Set Recipient | This method has options to set CC/BCC as well
+      lo_send_request->add_recipient(
+        i_recipient = cl_cam_address_bcs=>create_internet_address(
+                        i_address_string = CONV #( lv_recepient )
+                      )
+        i_express   = abap_true ).
+      "Send Email
+      DATA(lv_sent_to_all) = lo_send_request->send( ).
+      COMMIT WORK.
+
+    CATCH cx_send_req_bcs INTO DATA(lx_req_bsc).
+      "Error handling
+    CATCH cx_document_bcs INTO DATA(lx_doc_bcs).
+      "Error handling
+    CATCH cx_address_bcs  INTO DATA(lx_add_bcs).
+      "Error handling
+
+  ENDTRY.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  PREPARE_ATTACHMENT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      <--P_WA_XSTRING  text
+*----------------------------------------------------------------------*
+FORM prepare_attachment USING p_wa_xstring.
+
+  DATA:lt_fcat TYPE lvc_t_fcat.
+  FIELD-SYMBOLS: <fs_data> TYPE ANY TABLE.
+
+  GET REFERENCE OF i_ec_file INTO DATA(lo_data_log).
+  ASSIGN lo_data_log->* TO <fs_data>.
+
+  TRY.
+      cl_salv_table=>factory(
+        IMPORTING r_salv_table = DATA(lo_table)
+        CHANGING  t_table      = <fs_data> ).
+
+      lt_fcat = cl_salv_controller_metadata=>get_lvc_fieldcatalog(
+                      r_columns      = lo_table->get_columns( )
+                      r_aggregations = lo_table->get_aggregations( )
+                      ).
+
+      DELETE lt_fcat WHERE fieldname = 'MANDT' OR
+                           fieldname = 'FGUID'.
+      READ TABLE lt_fcat ASSIGNING FIELD-SYMBOL(<fs_fcat>) WITH KEY fieldname = 'FILENAME'.
+      <fs_fcat>-reptext = 'File Name.'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'FILEDATE'.
+      <fs_fcat>-reptext = 'File Date'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'FSTATUS'.
+      <fs_fcat>-reptext = 'File Status'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'REMARKS'.
+      <fs_fcat>-reptext = 'File Remarks'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'ERDAT'.
+      <fs_fcat>-reptext = 'Created Date'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'ERZET'.
+      <fs_fcat>-reptext = 'Created Time'.
+
+      READ TABLE lt_fcat ASSIGNING <fs_fcat> WITH KEY fieldname = 'ERNAM'.
+      <fs_fcat>-reptext = 'Created By'.
+
+      DATA(lo_result) =
+        cl_salv_ex_util=>factory_result_data_table(
+          r_data         = lo_data_log
+          t_fieldcatalog = lt_fcat ).
+
+      cl_salv_bs_tt_util=>if_salv_bs_tt_util~transform(
+        EXPORTING
+          xml_type      = if_salv_bs_xml=>c_type_xlsx
+          xml_version   = cl_salv_bs_a_xml_base=>get_version( )
+          r_result_data = lo_result
+          xml_flavour   = if_salv_bs_c_tt=>c_tt_xml_flavour_export
+          gui_type      = if_salv_bs_xml=>c_gui_type_gui
+        IMPORTING
+          xml           = wa_xstring ).
+
+    CATCH cx_root.
+      CLEAR p_wa_xstring.
+  ENDTRY.
+
+  IF p_wa_xstring IS NOT INITIAL.
+    OPEN DATASET lv_xls_file FOR OUTPUT IN BINARY MODE.
+    IF sy-subrc EQ 0.
+      TRANSFER p_wa_xstring TO lv_xls_file.
+      CLOSE DATASET lv_xls_file.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  VALIDATE_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM validate_data.
+
+  DATA:
+    lv_po_date TYPE zec_data-ecom_po_date,
+    lv_werks   TYPE zec_data-werks,
+    lv_matnr   TYPE zec_data-matnr,
+    lv_charg   TYPE zec_data-charg,
+    lv_meins   TYPE zec_data-meins,
+    lv_kunwe   TYPE zec_data-kunwe,
+    lv_lhs     TYPE zec_raw-rate,
+    lv_rhs     TYPE zec_raw-rate,
+    lv_rhs2    TYPE zec_raw-rate,
+    lv_bool(1),
+    lv_zmeng   TYPE string,
+    lv_rate    TYPE string,
+    lv_dotc    TYPE i.
+
+  SORT i_ec_raw BY ecom_po ASCENDING.
+
+  CLEAR w_ec_raw.
+  LOOP AT i_ec_raw INTO w_ec_raw.
+    DATA(lv_tabix) = sy-tabix.
+    w_ec_mast-fguid = w_ec_raw-fguid.
+    w_ec_mast-rguid = w_ec_raw-rguid.
+
+    IF w_ec_raw-werks IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Plant Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      CLEAR: w_ec_file, lv_split2.
+      READ TABLE i_ec_file INTO w_ec_file WITH KEY fguid = w_ec_raw-fguid.
+      IF sy-subrc EQ 0.
+        SPLIT w_ec_file-filename AT '_' INTO lv_split1 lv_split2 lv_split3 lv_split4.
+        CONDENSE w_ec_raw-werks NO-GAPS.
+        IF lv_split2 NE w_ec_raw-werks.
+          CONCATENATE w_ec_raw-remarks 'Plant does not match with File Name,' INTO w_ec_raw-remarks SEPARATED BY space.
+          CONDENSE w_ec_raw-remarks.
+        ELSE.
+          w_ec_mast-werks = w_ec_raw-werks.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF w_ec_raw-ecom_po IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Portal Order Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      IF w_ec_mast-werks IS NOT INITIAL.
+        TRANSLATE w_ec_raw-ecom_po TO UPPER CASE. CLEAR lv_bool.
+        SELECT SINGLE @abap_true FROM zec_data INTO @lv_bool
+          WHERE ecom_po = @w_ec_raw-ecom_po
+            AND werks   = @w_ec_mast-werks.
+        IF sy-subrc EQ 0.
+          CONCATENATE w_ec_raw-remarks 'Duplicate Portal Order,' INTO w_ec_raw-remarks SEPARATED BY space.
+          CONDENSE w_ec_raw-remarks.
+        ELSE.
+          w_ec_mast-ecom_po = w_ec_raw-ecom_po.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+    IF w_ec_raw-ecom_po_date IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'Port.Ord Date is empty,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_po_date = w_ec_raw-ecom_po_date.
+      CALL FUNCTION 'DATE_CHECK_PLAUSIBILITY'
+        EXPORTING
+          date                      = lv_po_date
+        EXCEPTIONS
+          plausibility_check_failed = 1
+          OTHERS                    = 2.
+      IF sy-subrc <> 0.
+        CONCATENATE w_ec_raw-remarks 'Invalid Date,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSE.
+        w_ec_mast-ecom_po_date = lv_po_date.
+      ENDIF.
+    ENDIF.
+
+    IF w_ec_raw-kunwe IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Ship-To-Party Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_kunwe = w_ec_raw-kunwe.
+      lv_kunwe = |{ lv_kunwe ALPHA = IN }|. CLEAR lv_bool.
+      SELECT SINGLE @abap_true FROM knvv INTO @lv_bool
+        WHERE kunnr = @lv_kunwe.
+      IF sy-subrc NE 0.
+        CONCATENATE w_ec_raw-remarks 'Invalid Ship-To,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSE.
+        w_ec_mast-kunwe = lv_kunwe.
+      ENDIF.
+    ENDIF.
+
+    IF w_ec_raw-matnr IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Material Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_matnr = w_ec_raw-matnr.
+      CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+        EXPORTING
+          input        = lv_matnr
+        IMPORTING
+          output       = lv_matnr
+        EXCEPTIONS
+          length_error = 1
+          OTHERS       = 2.
+
+      CLEAR lv_bool.
+      SELECT SINGLE @abap_true FROM mara INTO @lv_bool
+        WHERE matnr = @lv_matnr.
+      IF sy-subrc EQ 0.
+        IF w_ec_mast-werks IS NOT INITIAL.
+          CLEAR lv_bool.
+          SELECT SINGLE @abap_true FROM marc INTO @lv_bool
+            WHERE matnr = @lv_matnr
+              AND werks = @w_ec_mast-werks.
+          IF sy-subrc EQ 0.
+            w_ec_mast-matnr = lv_matnr.
+          ELSE.
+            CONCATENATE w_ec_raw-remarks 'Material not extended to Plant,' INTO w_ec_raw-remarks SEPARATED BY space.
+            CONDENSE w_ec_raw-remarks.
+          ENDIF.
+        ENDIF.
+      ELSE.
+        CONCATENATE w_ec_raw-remarks 'Invalid Material,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ENDIF.
+    ENDIF.
+
+    IF w_ec_raw-charg IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Batch Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_charg = w_ec_raw-charg.
+      TRANSLATE lv_charg TO UPPER CASE. CLEAR lv_bool.
+      IF w_ec_mast-werks IS NOT INITIAL AND w_ec_mast-matnr IS NOT INITIAL.
+        SELECT SINGLE @abap_true FROM mcha INTO @lv_bool
+          WHERE matnr = @w_ec_mast-matnr
+            AND werks = @w_ec_mast-werks
+            AND charg = @lv_charg.
+        IF sy-subrc NE 0.
+          CONCATENATE w_ec_raw-remarks 'Invalid Material Batch Combination,' INTO w_ec_raw-remarks SEPARATED BY space.
+          CONDENSE w_ec_raw-remarks.
+        ELSE.
+          w_ec_mast-charg = lv_charg.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+
+*Quantity Validations
+    IF w_ec_raw-zmeng IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Quantity Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_zmeng = w_ec_raw-zmeng.
+      FIND ALL OCCURRENCES OF '.' IN w_ec_raw-zmeng MATCH COUNT lv_dotc.
+      IF lv_zmeng CN '0123456789.'.  "Contains Not Only.
+        CONCATENATE w_ec_raw-remarks 'Invalid Quantity,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSEIF w_ec_raw-zmeng = '.'.
+        CONCATENATE w_ec_raw-remarks 'Invalid Quantity,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+*        ENDIF.
+      ELSEIF lv_dotc GT 1.
+        CONCATENATE w_ec_raw-remarks 'Invalid Quantity,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSE.
+        w_ec_mast-zmeng = CONV #( w_ec_raw-zmeng ).
+      ENDIF.
+    ENDIF.
+
+*UOM Validations
+    IF w_ec_raw-meins IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'Blank UOM,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_meins = w_ec_raw-meins.
+      TRANSLATE lv_meins TO UPPER CASE.
+      w_ec_mast-meins = lv_meins.
+    ENDIF.
+
+*Rate Validations
+    CLEAR lv_dotc.
+    IF w_ec_raw-rate IS INITIAL.
+      CONCATENATE w_ec_raw-remarks 'No Rate Entered,' INTO w_ec_raw-remarks SEPARATED BY space.
+      CONDENSE w_ec_raw-remarks.
+    ELSE.
+      lv_rate = w_ec_raw-rate.
+      FIND ALL OCCURRENCES OF '.' IN w_ec_raw-rate MATCH COUNT lv_dotc.
+      IF lv_rate CN '0123456789.'.  "Contains Not Only.
+        CONCATENATE w_ec_raw-remarks 'Invalid Rate,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSEIF w_ec_raw-rate = '.'.    "Cannot contain only '.'
+        CONCATENATE w_ec_raw-remarks 'Invalid Rate,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSEIF lv_dotc GT 1.           "Cannot contain more than one '.'
+        CONCATENATE w_ec_raw-remarks 'Invalid Rate,' INTO w_ec_raw-remarks SEPARATED BY space.
+        CONDENSE w_ec_raw-remarks.
+      ELSE.
+        w_ec_mast-rate = CONV #( w_ec_raw-rate ).
+      ENDIF.
+    ENDIF.
+
+*Existing Validations from Wareiq which Ameeth suggested.
+*        IF w_ec_raw-rate IS NOT INITIAL AND ( w_ec_raw-rate CA '-' ).
+*          REPLACE ALL OCCURRENCES OF '-' IN w_ec_raw-rate WITH '0'.
+*          CONDENSE w_ec_raw-rate NO-GAPS.
+*        ENDIF.
+*
+*        IF w_ec_raw-rate IS NOT INITIAL AND ( w_ec_raw-rate CA ',' ).
+*          REPLACE ALL OCCURRENCES OF ',' IN w_ec_raw-rate WITH space.
+*          CONDENSE w_ec_raw-rate NO-GAPS.
+*        ENDIF.
+
+    IF w_ec_raw-ecom_cust IS NOT INITIAL.
+      w_ec_mast-ecom_cust = w_ec_raw-ecom_cust.
+    ENDIF.
+
+    IF w_ec_raw-ecom_inv IS NOT INITIAL.
+      TRANSLATE w_ec_raw-ecom_inv TO UPPER CASE.
+      w_ec_mast-ecom_inv = w_ec_raw-ecom_inv.
+    ENDIF.
+
+*This check is removed because functional want to allow any number of Duplicate Material, Batch Entries in a File.
+*    READ TABLE i_ec_mast_tmp WITH KEY ecom_po = w_ec_mast-ecom_po
+*                                      werks = w_ec_mast-werks
+*                                      matnr = w_ec_mast-matnr
+*                                      charg = w_ec_mast-charg TRANSPORTING NO FIELDS.
+*    IF sy-subrc EQ 0.
+*      CONCATENATE w_ec_raw-remarks 'Duplicate Material+Batch in PO,' INTO w_ec_raw-remarks SEPARATED BY space.
+*      CONDENSE w_ec_raw-remarks.
+*    ENDIF.
+
+    w_ec_raw-aedat = sy-datum.
+    w_ec_raw-aezet = sy-uzeit.
+    w_ec_raw-aenam = sy-uname.
+    w_ec_mast-erdat = sy-datum.
+    w_ec_mast-erzet = sy-uzeit.
+    w_ec_mast-ernam = sy-uname.
+
+    IF w_ec_raw-remarks IS NOT INITIAL.
+      w_ec_raw-status = 'FAILED'.
+    ELSE.
+      w_ec_raw-status = 'UPLOADED'.
+    ENDIF.
+
+    IF w_ec_raw-remarks IS NOT INITIAL.
+      DATA(lv_len) = strlen( w_ec_raw-remarks ).
+      DATA(lv_last) = lv_len - 1.
+      TRY.
+          IF w_ec_raw-remarks+lv_last(lv_last) = ','.
+            w_ec_raw-remarks+lv_last(lv_last) = ''.
+          ENDIF.
+        CATCH cx_root.
+      ENDTRY.
+      CONDENSE w_ec_raw-remarks.
+    ENDIF.
+
+    APPEND w_ec_mast TO i_ec_mast_tmp.
+    MODIFY i_ec_raw FROM w_ec_raw INDEX lv_tabix TRANSPORTING remarks status aedat aezet aenam .
+    CLEAR: w_ec_mast, w_ec_raw, lv_zmeng, lv_dotc.
+  ENDLOOP.
+
+*Move only those records where all items of PO are valid and no error.
+  MOVE-CORRESPONDING i_ec_raw TO i_ecom_po.
+  DELETE ADJACENT DUPLICATES FROM i_ecom_po COMPARING ecom_po
+                                                      werks. "Santosh CI# INC0105527
+  DELETE i_ecom_po WHERE ecom_po IS INITIAL.
+
+  CLEAR w_ec_mast.
+  LOOP AT i_ecom_po INTO DATA(w_ecom_po).
+    READ TABLE i_ec_raw WITH KEY ecom_po = w_ecom_po-ecom_po
+                                 werks   = w_ecom_po-werks  "Santosh CI# INC0105527
+                                 status  = 'FAILED' TRANSPORTING NO FIELDS.
+    IF sy-subrc NE 0.
+      TRANSLATE w_ecom_po-ecom_po TO UPPER CASE.
+      LOOP AT i_ec_mast_tmp INTO w_ec_mast WHERE ecom_po = w_ecom_po-ecom_po
+                                             AND werks   = w_ecom_po-werks. "Santosh CI# INC0105527
+        APPEND w_ec_mast TO i_ec_mast.
+        CLEAR w_ec_mast.
+      ENDLOOP.
+    ENDIF.
+  ENDLOOP.
+
+  MODIFY zec_data FROM TABLE i_ec_mast.
+  MODIFY zec_raw FROM TABLE i_ec_raw.
+  COMMIT WORK.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_SO_ORDER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM create_docs.
+*Begin of MOD01(+)
+  TYPES: BEGIN OF ty_item,
+           material   TYPE matnr,
+           batch      TYPE charg_d,
+           plant      TYPE werks_d,
+           store_loc  TYPE lgort_d,
+           target_qty TYPE dzmeng,
+         END OF ty_item.
+  TYPES: BEGIN OF ty_error,
+           error TYPE char100,
+         END OF ty_error.
+  DATA: lt_item   TYPE TABLE OF ty_item,
+        lt_itm    TYPE TABLE OF ty_item,
+        ls_item   TYPE ty_item,
+        lt_error  TYPE TABLE OF ty_error,
+        ls_error  TYPE ty_error,
+        lv_bstock TYPE char1.
+*End of MOD01(+)
+*Clearing these tables to save memory. When uploading 21k records, job is dumping with error no more memory available.
+  CLEAR:i_ec_raw, i_ec_file, wa_xstring, i_ec_mast_tmp, i_ecom_po.
+
+  DATA: r_spart TYPE RANGE OF mara-spart.
+
+  IF i_ec_mast IS NOT INITIAL.
+
+    SELECT SINGLE zcode_cmmt FROM zcode_mstr INTO @DATA(lv_auart)
+      WHERE zcode_fldname = 'WAREIQ'
+        AND zcode_value = 'AUART'.
+
+    SELECT SINGLE zcode_cmmt FROM zcode_mstr INTO @DATA(lv_kschl)
+      WHERE zcode_fldname = 'WAREIQ'
+        AND zcode_value = 'KSCHL'.
+
+    SELECT SINGLE zcode_cmmt FROM zcode_mstr INTO @DATA(lv_vkorg)
+      WHERE zcode_fldname = 'WAREIQ'
+        AND zcode_value = 'VKORG'.
+
+    SELECT SINGLE zcode_cmmt FROM zcode_mstr INTO @DATA(lv_vtweg)
+      WHERE zcode_fldname = 'WAREIQ'
+        AND zcode_value = 'VTWEG'.
+
+    SELECT SINGLE zcode_cmmt FROM zcode_mstr INTO @DATA(lv_waers)
+      WHERE zcode_fldname = 'WAREIQ'
+        AND zcode_value = 'WAERS'.
+
+*For FOR ALL ENTRIES LHS and RHS should be same type
+    MOVE-CORRESPONDING i_ec_mast TO i_werks.
+    DELETE ADJACENT DUPLICATES FROM i_werks COMPARING werks.
+
+    IF i_werks IS NOT INITIAL.
+      SELECT zcode_fldname,
+             zcode_value,
+             zcode_cmmt,
+             zcode_cmmt_1
+        FROM zcode_mstr INTO TABLE @i_sold_to
+        FOR ALL ENTRIES IN @i_werks
+        WHERE zcode_fldname = 'WAREIQ'
+          AND zcode_cmmt = @i_werks-werks.
+
+      IF sy-subrc EQ 0.
+        SELECT kunnr,
+               vkorg,
+               vtweg,
+               spart,
+               vwerk,
+               vkgrp,
+               vkbur,
+               zterm
+          FROM knvv INTO TABLE @DATA(i_knvv)
+          FOR ALL ENTRIES IN @i_sold_to
+          WHERE kunnr = @i_sold_to-zcode_value
+            AND vwerk = @i_sold_to-zcode_cmmt
+            AND vkorg = @lv_vkorg
+            AND vtweg = @lv_vtweg.
+      ENDIF.
+    ENDIF.
+
+    SELECT kunnr,
+           katr2
+      FROM kna1 INTO TABLE @DATA(i_kna1)
+      FOR ALL ENTRIES IN @i_ec_mast
+      WHERE kunnr = @i_ec_mast-kunwe.
+
+    SELECT matnr,
+           spart
+      FROM mara INTO TABLE @DATA(i_mara)
+      FOR ALL ENTRIES IN @i_ec_mast
+      WHERE matnr = @i_ec_mast-matnr.
+
+    LOOP AT i_ec_mast INTO w_ec_mast.
+      READ TABLE i_mara INTO DATA(w_mara) WITH KEY matnr = w_ec_mast-matnr.
+      IF sy-subrc EQ 0.
+        w_po_div-ecom_po = w_ec_mast-ecom_po.
+        w_po_div-werks   = w_ec_mast-werks.  "Santosh CI# INC0105527
+        w_po_div-spart   = w_mara-spart.
+        APPEND w_po_div TO i_po_div.
+        CLEAR w_po_div.
+      ENDIF.
+    ENDLOOP.
+
+    SORT i_po_div BY ecom_po
+                     werks     "Santosh CI# INC0105527
+                     spart.
+    DELETE ADJACENT DUPLICATES FROM i_po_div COMPARING ecom_po
+                                                       werks    "Santosh CI# INC0105527
+                                                       spart.
+
+    r_spart = VALUE #( FOR wa_mara IN i_mara
+                         ( sign = 'I'
+                           option = 'EQ'
+                           low = wa_mara-spart
+                          ) ).
+
+    SORT r_spart BY low.
+    DELETE ADJACENT DUPLICATES FROM r_spart COMPARING low.
+    DELETE i_knvv WHERE spart NOT IN r_spart.
+
+*Begin of MOD01(+)
+    IF i_ec_mast[] IS NOT INITIAL.
+      SELECT matnr,
+             werks,
+             lgort,
+             charg,
+             clabs
+        FROM mchb
+        INTO TABLE @DATA(lt_mchb)
+         FOR ALL ENTRIES IN @i_ec_mast
+       WHERE matnr = @i_ec_mast-matnr
+         AND werks = @i_ec_mast-werks
+         AND charg = @i_ec_mast-charg
+         AND lvorm = @space.
+      IF sy-subrc EQ 0.
+        SORT: lt_mchb BY matnr werks lgort charg.
+      ENDIF.
+    ENDIF.
+*End of MOD01(+)
+
+*    MOVE-CORRESPONDING i_ec_mast TO i_ecom_po.
+*    SORT i_ecom_po BY ecom_po.
+*    DELETE ADJACENT DUPLICATES FROM i_ecom_po COMPARING ecom_po.
+
+*    LOOP AT i_ecom_po INTO DATA(w_ecom_po).
+    CLEAR w_po_div.
+    LOOP AT i_po_div INTO w_po_div.
+      w_item_no = 1.
+
+      CLEAR: g_guid, i_ec_mast_tmp, i_ord_cond_in, i_ret_ord, g_delivery, g_guid, g_guid2, g_invoice,
+ g_msg, g_pgidoc, i_dlvref, i_ec_log, i_ord_cond_inx, i_ord_itm_in, i_ord_itm_inx, i_ord_part,
+ i_ord_schd_in, i_ord_schd_inx, i_prot, i_ret_ord, w_dlvref, w_ec_log, w_ord_head_in,
+ w_ord_head_inx, w_pgidata, g_sales_ord, i_billingdata, w_billingdata, i_return_bill, i_success, i_lips, i_mseg, i_vbrp.
+      "i_vbap
+      LOOP AT i_ec_mast INTO w_ec_mast WHERE ecom_po = w_po_div-ecom_po
+                                         AND werks   = w_po_div-werks.  ""Santosh CI# INC0105527
+
+        READ TABLE i_mara INTO w_mara WITH KEY matnr = w_ec_mast-matnr
+                                               spart = w_po_div-spart.
+        IF sy-subrc EQ 0.
+          w_ord_head_in-division = w_mara-spart.
+
+          w_ord_head_in-doc_type   = lv_auart.
+          w_ord_head_in-sales_org  = lv_vkorg.
+          w_ord_head_in-distr_chan = lv_vtweg.
+
+          w_ord_head_in-purch_date = w_ec_mast-ecom_po_date.
+          w_ord_head_in-purch_no_c = w_ec_mast-ecom_po.
+          w_ord_head_in-ref_1      = w_ec_mast-ecom_cust.
+          w_ord_head_in-purch_no_s = w_ec_mast-ecom_inv.
+
+          w_ord_part-partn_role = 'WE'.
+          w_ord_part-partn_numb = w_ec_mast-kunwe.
+          APPEND w_ord_part TO i_ord_part.
+          CLEAR w_ord_part.
+
+          READ TABLE i_kna1 INTO DATA(w_kna1) WITH KEY kunnr = w_ec_mast-kunwe.
+          IF sy-subrc = 0.
+            CLEAR w_sold_to.
+            READ TABLE i_sold_to INTO w_sold_to WITH KEY zcode_cmmt = w_ec_mast-werks
+                                                         zcode_cmmt_1 = w_kna1-katr2.
+            IF sy-subrc EQ 0.
+              w_ord_part-partn_role = 'AG'.
+              w_ord_part-partn_numb = w_sold_to-zcode_value.
+              APPEND w_ord_part TO i_ord_part.
+              CLEAR:w_kna1, w_ord_part.
+            ENDIF.
+          ELSE.
+            CLEAR w_sold_to.
+            READ TABLE i_sold_to INTO w_sold_to WITH KEY zcode_value = w_ec_mast-werks.
+            IF sy-subrc EQ 0.
+              w_ord_part-partn_role = 'AG'.
+              w_ord_part-partn_numb = w_sold_to-zcode_cmmt.
+              APPEND w_ord_part TO i_ord_part.
+              CLEAR:i_kna1, w_ord_part.
+            ENDIF.
+          ENDIF.
+
+          READ TABLE i_knvv INTO DATA(w_knvv) WITH KEY kunnr = w_sold_to-zcode_value
+                                                       vwerk = w_sold_to-zcode_cmmt
+                                                       vkorg = lv_vkorg
+                                                       vtweg = lv_vtweg
+                                                       spart = w_mara-spart.
+          IF sy-subrc EQ 0.
+            w_ord_head_in-sales_grp = w_knvv-vkgrp.
+            w_ord_head_in-sales_off = w_knvv-vkbur.
+            w_ord_head_in-pmnttrms  = w_knvv-zterm.
+          ENDIF.
+
+          w_ord_head_inx-doc_type   = 'X'.
+          w_ord_head_inx-sales_org  = 'X'.
+          w_ord_head_inx-distr_chan = 'X'.
+          w_ord_head_inx-division   = 'X'.
+          w_ord_head_inx-sales_grp  = 'X'.
+          w_ord_head_inx-sales_off  = 'X'.
+          w_ord_head_inx-pmnttrms   = 'X'.
+          w_ord_head_inx-purch_no_c = 'X'.
+          w_ord_head_inx-purch_date = 'X'.
+          w_ord_head_inx-ref_1      = 'X'.
+          w_ord_head_inx-purch_no_s = 'X'.
+
+          w_item_no2 = w_item_no * 10.
+          w_ord_itm_in-itm_number = w_item_no2.
+          w_ord_itm_in-material   = w_ec_mast-matnr.
+          w_ord_itm_in-plant      = w_ec_mast-werks.
+          w_ord_itm_in-batch      = w_ec_mast-charg.
+          w_ord_itm_in-target_qty = w_ec_mast-zmeng.
+          w_ord_itm_in-target_qu  = w_ec_mast-meins.
+          w_ord_itm_in-sales_unit = w_ec_mast-meins.
+          w_ord_itm_in-store_loc = 'FG01'.
+          IF w_ec_mast-rate IS INITIAL.
+            w_ord_itm_in-item_categ = 'TANN'.
+          ENDIF.
+
+          APPEND w_ord_itm_in TO i_ord_itm_in.
+          CLEAR w_ord_itm_in.
+
+          w_ord_itm_inx-itm_number = w_item_no2.
+          w_ord_itm_inx-material   = 'X'.
+          w_ord_itm_inx-plant      = 'X'.
+          w_ord_itm_inx-batch      = 'X'.
+          w_ord_itm_inx-target_qty = 'X'.
+          w_ord_itm_inx-target_qu  = 'X'.
+          w_ord_itm_inx-sales_unit = 'X'.
+          w_ord_itm_inx-store_loc  = 'X'.
+
+          IF w_ec_mast-rate IS INITIAL.
+            w_ord_itm_inx-item_categ = 'X'.
+          ENDIF.
+
+          APPEND w_ord_itm_inx TO i_ord_itm_inx.
+          CLEAR w_ord_itm_inx.
+
+          w_ord_cond_in-itm_number = w_item_no2.
+          w_ord_cond_in-cond_type  = lv_kschl.
+          w_ord_cond_in-cond_value = w_ec_mast-rate.
+          w_ord_cond_in-currency   = lv_waers.
+          APPEND w_ord_cond_in TO i_ord_cond_in.
+          CLEAR w_ord_cond_in.
+
+          w_ord_cond_inx-itm_number = w_item_no2.
+          w_ord_cond_inx-cond_type  = lv_kschl.
+          w_ord_cond_inx-cond_value = 'X'.
+          w_ord_cond_inx-currency   = 'X'.
+          APPEND w_ord_cond_inx TO i_ord_cond_inx.
+          CLEAR w_ord_cond_inx.
+
+          w_ord_schd_in-itm_number = w_item_no2.
+          w_ord_schd_in-req_date   = sy-datum. "w_ec_mast-ecom_po_date.
+          w_ord_schd_in-req_qty    = w_ec_mast-zmeng.
+          APPEND w_ord_schd_in TO i_ord_schd_in.
+          CLEAR w_ord_schd_in.
+
+          w_ord_schd_inx-itm_number = w_item_no2.
+          w_ord_schd_inx-req_date   = 'X'.
+          w_ord_schd_inx-req_qty    = 'X'.
+          APPEND w_ord_schd_inx TO i_ord_schd_inx.
+          CLEAR w_ord_schd_inx.
+
+          w_item_no = w_item_no + 1.
+        ENDIF.
+        CLEAR: w_ec_mast, w_mara, w_knvv.
+      ENDLOOP.
+*----------------------------------------------------------------------------------
+*Begin of MOD01(+)
+      IF i_ord_itm_in[] IS NOT INITIAL.
+        lt_item[] = CORRESPONDING #( i_ord_itm_in ).
+        LOOP AT lt_item ASSIGNING FIELD-SYMBOL(<fs_item>).
+          COLLECT <fs_item> INTO lt_itm.
+        ENDLOOP.
+      ENDIF.
+*End of MOD01(+)
+
+*Sales Order Creation
+      IF w_ord_head_in IS NOT INITIAL.
+        CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2'
+          EXPORTING
+            order_header_in      = w_ord_head_in
+            order_header_inx     = w_ord_head_inx
+            testrun              = w_testrun
+          IMPORTING
+            salesdocument        = g_sales_ord
+          TABLES
+            return               = i_ret_ord
+            order_items_in       = i_ord_itm_in
+            order_items_inx      = i_ord_itm_inx
+            order_partners       = i_ord_part
+            order_schedules_in   = i_ord_schd_in
+            order_schedules_inx  = i_ord_schd_inx
+            order_conditions_in  = i_ord_cond_in
+            order_conditions_inx = i_ord_cond_inx.
+
+        IF g_sales_ord IS NOT INITIAL.
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait = 'X'.
+
+          CLEAR: i_ec_mast_tmp, w_ec_log, i_ec_log.
+          LOOP AT i_ec_mast ASSIGNING FIELD-SYMBOL(<fs_ec_mast>) WHERE ecom_po = w_po_div-ecom_po
+                                                                   AND werks   = w_po_div-werks.  "Santosh CI# INC0105527
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+
+              <fs_ec_mast>-vbeln_va = g_sales_ord.
+              <fs_ec_mast>-status_va = 'SUCCESS'.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          COMMIT WORK AND WAIT.
+
+        ELSE.
+
+*If order creation is failed capture messages for log display.
+          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+          CALL FUNCTION 'GUID_CREATE'
+            IMPORTING
+              ev_guid_16 = g_guid.
+
+          CLEAR: w_ec_log, i_ec_mast_tmp.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                     AND werks   = w_po_div-werks. "Santosh CI# INC0105527
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+              g_fguid = <fs_ec_mast>-fguid.
+              <fs_ec_mast>-status_va = 'FAILED'.
+              <fs_ec_mast>-error_va = g_guid.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          w_ec_log-fguid = g_fguid.
+          w_ec_log-eguid = g_guid.
+          LOOP AT i_ret_ord INTO w_ret_ord WHERE type = 'E' OR
+                                                 type = 'W' OR
+                                                 type = 'I'.
+
+            CALL FUNCTION 'GUID_CREATE'
+              IMPORTING
+                ev_guid_16 = g_guid2.
+
+            CLEAR g_msg.
+            CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+              EXPORTING
+                msgid               = w_ret_ord-id
+                msgnr               = w_ret_ord-number
+                msgv1               = w_ret_ord-message_v1
+                msgv2               = w_ret_ord-message_v2
+                msgv3               = w_ret_ord-message_v3
+                msgv4               = w_ret_ord-message_v4
+              IMPORTING
+                message_text_output = g_msg.
+
+            w_ec_log-erguid = g_guid2.
+            w_ec_log-remarks = g_msg.
+            APPEND w_ec_log TO i_ec_log.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          MODIFY zec_log FROM TABLE i_ec_log.
+          COMMIT WORK AND WAIT.
+          CONTINUE.
+        ENDIF.
+        CLEAR: g_guid, i_ret_ord, i_ec_log, g_msg, w_ord_head_in, w_ord_head_inx,
+               i_ret_ord, i_ord_itm_in, i_ord_itm_inx, i_ord_part, i_ord_schd_in, i_ord_schd_inx,
+               i_ord_cond_in, i_ord_cond_inx, w_ec_log.
+      ENDIF.
+*-------------------------------------------------------------------------------
+*Delivery Creation
+*      IF sy-uname <> 'ITCOR'.
+      IF g_sales_ord IS NOT INITIAL.
+
+*Begin of MOD01(+)
+        CLEAR: lv_bstock,
+               ls_error,
+               lt_error[].
+        IF lt_itm[] IS NOT INITIAL.
+          LOOP AT lt_itm ASSIGNING FIELD-SYMBOL(<fs_itm>).
+            READ TABLE lt_mchb INTO DATA(ls_mchb)
+                               WITH KEY matnr = <fs_itm>-material
+                                        werks = <fs_itm>-plant
+                                        lgort = <fs_itm>-store_loc
+                                        charg = <fs_itm>-batch
+                             BINARY SEARCH.
+            IF sy-subrc = 0.
+              IF <fs_itm>-target_qty > ls_mchb-clabs.
+                lv_bstock = abap_true.
+                CONCATENATE 'Material' <fs_itm>-material 'batch' <fs_itm>-batch 'stock insufficient'
+                       INTO ls_error-error
+                  SEPARATED BY space.
+                APPEND ls_error TO lt_error.
+              ENDIF.
+            ENDIF.
+            CLEAR: ls_error,
+                   ls_mchb.
+          ENDLOOP.
+        ENDIF.
+        IF lv_bstock = abap_false.
+*End of MOD01(+)
+
+          w_dlvref-ref_doc = g_sales_ord.
+          APPEND w_dlvref TO i_dlvref.
+
+          CALL FUNCTION 'BAPI_OUTB_DELIVERY_CREATE_SLS'
+            IMPORTING
+              delivery          = g_delivery
+            TABLES
+              sales_order_items = i_dlvref
+              return            = i_ret_ord.
+
+          IF g_delivery IS NOT INITIAL.
+
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                wait = 'X'.
+
+            CLEAR i_lips.
+            SELECT vbeln,
+                   posnr,
+                   matnr,
+                   charg,
+                   lfimg
+              FROM lips INTO TABLE @i_lips
+              WHERE vbeln = @g_delivery.
+
+            CLEAR: i_ec_mast_tmp, w_ec_log, i_ec_log.
+            LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                       AND werks   = w_po_div-werks   "Santosh CI# INC0105527
+                                                       AND vbeln_va IS NOT INITIAL.
+
+              READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                     spart = w_po_div-spart.
+              IF sy-subrc EQ 0.
+
+* To check if created Delivery is complete or partial( all items of order are involved in Delivery as well).
+* If partial capture and populate all E, W, I messages for each order item not created in Delivery.
+                READ TABLE i_lips WITH KEY vbeln = g_delivery
+                                           matnr = <fs_ec_mast>-matnr
+                                           charg = <fs_ec_mast>-charg TRANSPORTING NO FIELDS.
+                IF sy-subrc EQ 0.
+                  <fs_ec_mast>-vbeln_vl = g_delivery.
+                  <fs_ec_mast>-status_vl = 'SUCCESS'.
+                  <fs_ec_mast>-aedat = sy-datum.
+                  <fs_ec_mast>-aezet = sy-uzeit.
+                  <fs_ec_mast>-aenam = sy-uname.
+                  APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+                ELSE.
+
+                  CALL FUNCTION 'GUID_CREATE'
+                    IMPORTING
+                      ev_guid_16 = g_guid.
+
+                  <fs_ec_mast>-status_vl = 'FAILED'.
+                  <fs_ec_mast>-error_vl = g_guid.
+                  <fs_ec_mast>-aedat = sy-datum.
+                  <fs_ec_mast>-aezet = sy-uzeit.
+                  <fs_ec_mast>-aenam = sy-uname.
+                  APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+
+                  w_ec_log-fguid = <fs_ec_mast>-fguid.
+                  w_ec_log-eguid = g_guid.
+                  LOOP AT i_ret_ord INTO w_ret_ord WHERE type = 'E' OR
+                                                         type = 'W' OR
+                                                         type = 'I'.
+                    CALL FUNCTION 'GUID_CREATE'
+                      IMPORTING
+                        ev_guid_16 = g_guid2.
+
+                    CLEAR g_msg.
+                    CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+                      EXPORTING
+                        msgid               = w_ret_ord-id
+                        msgnr               = w_ret_ord-number
+                        msgv1               = w_ret_ord-message_v1
+                        msgv2               = w_ret_ord-message_v2
+                        msgv3               = w_ret_ord-message_v3
+                        msgv4               = w_ret_ord-message_v4
+                      IMPORTING
+                        message_text_output = g_msg.
+
+                    w_ec_log-erguid = g_guid2.
+                    w_ec_log-remarks = g_msg.
+                    APPEND w_ec_log TO i_ec_log.
+                  ENDLOOP.
+                ENDIF.
+*              ENDIF.
+              ENDIF.
+            ENDLOOP.
+
+            MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+            MODIFY zec_log FROM TABLE i_ec_log.
+            COMMIT WORK AND WAIT.
+
+          ELSE.
+*If Delivery creation is failed capture messages for log display.
+            CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+            CALL FUNCTION 'GUID_CREATE'
+              IMPORTING
+                ev_guid_16 = g_guid.
+
+            CLEAR: i_ec_mast_tmp, w_ec_log.
+            LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                       AND werks   = w_po_div-werks.  "Santosh CI# INC0105527
+              READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                     spart = w_po_div-spart.
+              IF sy-subrc EQ 0.
+                g_fguid = <fs_ec_mast>-fguid.
+                <fs_ec_mast>-vbeln_vl = g_delivery.
+                <fs_ec_mast>-status_vl = 'FAILED'.
+                <fs_ec_mast>-error_vl = g_guid.
+                <fs_ec_mast>-aedat = sy-datum.
+                <fs_ec_mast>-aezet = sy-uzeit.
+                <fs_ec_mast>-aenam = sy-uname.
+                APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+              ENDIF.
+            ENDLOOP.
+
+            w_ec_log-fguid = g_fguid.
+            w_ec_log-eguid = g_guid.
+            LOOP AT i_ret_ord INTO w_ret_ord WHERE type = 'E' OR
+                                                   type = 'W' OR
+                                                   type = 'I'.
+
+              CALL FUNCTION 'GUID_CREATE'
+                IMPORTING
+                  ev_guid_16 = g_guid2.
+
+              CLEAR g_msg.
+              CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+                EXPORTING
+                  msgid               = w_ret_ord-id
+                  msgnr               = w_ret_ord-number
+                  msgv1               = w_ret_ord-message_v1
+                  msgv2               = w_ret_ord-message_v2
+                  msgv3               = w_ret_ord-message_v3
+                  msgv4               = w_ret_ord-message_v4
+                IMPORTING
+                  message_text_output = g_msg.
+
+              w_ec_log-erguid = g_guid2.
+              w_ec_log-remarks = g_msg.
+              APPEND w_ec_log TO i_ec_log.
+            ENDLOOP.
+
+            MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+            MODIFY zec_log FROM TABLE i_ec_log.
+            CLEAR: g_guid, w_dlvref, i_dlvref, i_ret_ord, w_ec_log, g_guid2, w_ret_ord,
+                    i_ec_mast_tmp, i_ec_log.
+            COMMIT WORK AND WAIT.
+            CONTINUE.
+          ENDIF.
+*Begin of MOD01(+)
+        ELSE.
+          CALL FUNCTION 'GUID_CREATE'
+            IMPORTING
+              ev_guid_16 = g_guid.
+
+          CLEAR: i_ec_mast_tmp, w_ec_log.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast>
+                                WHERE ecom_po = w_po_div-ecom_po
+                                  AND werks   = w_po_div-werks.
+            READ TABLE i_mara INTO w_mara
+                              WITH KEY matnr = <fs_ec_mast>-matnr
+                                       spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+              g_fguid = <fs_ec_mast>-fguid.
+              <fs_ec_mast>-vbeln_vl  = g_delivery.
+              <fs_ec_mast>-status_vl = 'FAILED'.
+              <fs_ec_mast>-error_vl  = g_guid.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          w_ec_log-fguid = g_fguid.
+          w_ec_log-eguid = g_guid.
+          LOOP AT lt_error ASSIGNING FIELD-SYMBOL(<fs_error>).
+
+            CALL FUNCTION 'GUID_CREATE'
+              IMPORTING
+                ev_guid_16 = g_guid2.
+
+            w_ec_log-erguid  = g_guid2.
+            w_ec_log-remarks = <fs_error>-error.
+            APPEND w_ec_log TO i_ec_log.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          MODIFY zec_log FROM TABLE i_ec_log.
+          CLEAR: g_guid, w_dlvref, i_dlvref, i_ret_ord, w_ec_log, g_guid2, w_ret_ord,
+                  i_ec_mast_tmp, i_ec_log.
+          CLEAR: lt_error[].
+          COMMIT WORK AND WAIT.
+          CONTINUE.
+        ENDIF.
+*End of MOD01(+)
+      ENDIF.
+
+      CLEAR: g_guid, w_dlvref, i_dlvref, i_ret_ord, w_ec_log, g_guid2, w_ret_ord,
+             i_ec_mast_tmp, i_ec_log.
+*------------------------------------------------------------------------
+*PGI
+      IF g_delivery IS NOT INITIAL.
+
+        w_pgidata-vbeln_vl = g_delivery.
+        w_pgidata-wabuc = 'X'.
+
+        CALL FUNCTION 'WS_DELIVERY_UPDATE'
+          EXPORTING
+            vbkok_wa                 = w_pgidata
+            synchron                 = 'X'
+            delivery                 = g_delivery
+            nicht_sperren            = 'X'
+            if_database_update       = '1'
+            if_error_messages_send_0 = 'X'
+          TABLES
+            prot                     = i_prot.
+
+        SELECT SINGLE vbeln FROM vbfa INTO @g_pgidoc
+          WHERE vbelv = @g_delivery
+            AND vbtyp_n = 'R'.
+
+        IF sy-subrc EQ 0.
+
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait = 'X'.
+
+          SELECT SINGLE mblnr, mjahr FROM mkpf INTO @DATA(w_mkpf)
+            WHERE mblnr = @g_pgidoc.
+
+          CLEAR i_mseg.
+          SELECT mblnr,
+                 mjahr,
+                 zeile,
+                 matnr,
+                 charg,
+                 menge
+            FROM mseg INTO TABLE @i_mseg
+            WHERE mblnr = @w_mkpf-mblnr
+              AND mjahr = @w_mkpf-mjahr.
+
+          CLEAR: i_ec_mast_tmp, w_ec_log, i_ec_log.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                     AND werks   = w_po_div-werks    "Santosh CI# INC0105527
+                                                     AND vbeln_vl IS NOT INITIAL.
+
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+* To check if created Material Document is complete or partial( all items of Delivery are not involved in Material Document).
+* If partial capture and populate all E, W, I messages for each item not captured in Material Document.
+              READ TABLE i_mseg WITH KEY mblnr = w_mkpf-mblnr
+                                         mjahr = w_mkpf-mjahr
+                                         matnr = <fs_ec_mast>-matnr
+                                         charg = <fs_ec_mast>-charg TRANSPORTING NO FIELDS.
+
+              IF sy-subrc EQ 0.
+                <fs_ec_mast>-mblnr = w_mkpf-mblnr.
+                <fs_ec_mast>-mjahr = w_mkpf-mjahr.
+                <fs_ec_mast>-status_p = 'SUCCESS'.
+                <fs_ec_mast>-aedat = sy-datum.
+                <fs_ec_mast>-aezet = sy-uzeit.
+                <fs_ec_mast>-aenam = sy-uname.
+                APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+              ELSE.
+
+                CALL FUNCTION 'GUID_CREATE'
+                  IMPORTING
+                    ev_guid_16 = g_guid.
+
+                <fs_ec_mast>-status_p = 'FAILED'.
+                <fs_ec_mast>-error_p = g_guid.
+                <fs_ec_mast>-aedat = sy-datum.
+                <fs_ec_mast>-aezet = sy-uzeit.
+                <fs_ec_mast>-aenam = sy-uname.
+                APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+
+                w_ec_log-fguid = <fs_ec_mast>-fguid.
+                w_ec_log-eguid = g_guid.
+
+                LOOP AT i_prot INTO DATA(w_prot) WHERE msgty = 'E' OR
+                                                       msgty = 'W' OR
+                                                       msgty = 'I'.
+
+                  CALL FUNCTION 'GUID_CREATE'
+                    IMPORTING
+                      ev_guid_16 = g_guid2.
+
+                  CLEAR g_msg.
+                  CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+                    EXPORTING
+                      msgid               = w_prot-msgid
+                      msgnr               = w_prot-msgno
+                      msgv1               = w_prot-msgv1
+                      msgv2               = w_prot-msgv2
+                      msgv3               = w_prot-msgv3
+                      msgv4               = w_prot-msgv4
+                    IMPORTING
+                      message_text_output = g_msg.
+
+                  w_ec_log-erguid = g_guid2.
+                  w_ec_log-remarks = g_msg.
+                  APPEND w_ec_log TO i_ec_log.
+                ENDLOOP.
+              ENDIF.
+            ENDIF.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          MODIFY zec_log FROM TABLE i_ec_log.
+          COMMIT WORK AND WAIT.
+
+        ELSE.
+* *If Material Document creation is failed capture messages for log display.
+          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+          CALL FUNCTION 'GUID_CREATE'
+            IMPORTING
+              ev_guid_16 = g_guid.
+
+          CLEAR: i_ec_mast_tmp, w_ec_log.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                     AND werks   = w_po_div-werks.
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+              g_fguid = <fs_ec_mast>-fguid.
+              <fs_ec_mast>-status_p = 'FAILED'.
+              <fs_ec_mast>-error_p = g_guid.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          w_ec_log-fguid = g_fguid.
+          w_ec_log-eguid = g_guid.
+
+          CLEAR w_prot.
+          LOOP AT i_prot INTO w_prot WHERE msgty = 'E' OR
+                                           msgty = 'W' OR
+                                           msgty = 'I'.
+
+            CALL FUNCTION 'GUID_CREATE'
+              IMPORTING
+                ev_guid_16 = g_guid2.
+
+            CLEAR g_msg.
+            CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+              EXPORTING
+                msgid               = w_prot-msgid
+                msgnr               = w_prot-msgno
+                msgv1               = w_prot-msgv1
+                msgv2               = w_prot-msgv2
+                msgv3               = w_prot-msgv3
+                msgv4               = w_prot-msgv4
+              IMPORTING
+                message_text_output = g_msg.
+
+            w_ec_log-erguid = g_guid2.
+            w_ec_log-remarks = g_msg.
+            APPEND w_ec_log TO i_ec_log.
+
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          MODIFY zec_log FROM TABLE i_ec_log.
+          COMMIT WORK AND WAIT.
+          CLEAR: g_guid, w_pgidata, i_prot, w_mkpf, i_ec_mast_tmp,
+             w_ec_log, i_ec_log.
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+
+      CLEAR: g_guid, w_pgidata, i_prot, w_mkpf, i_ec_mast_tmp,
+             w_ec_log, i_ec_log.
+*--------------------------------------------------------------------------------
+*Invoice Creation
+      IF g_pgidoc IS NOT INITIAL.
+
+        w_billingdata-ordbilltyp      = 'ZDF2'.
+        w_billingdata-ref_doc         =  g_delivery.
+        w_billingdata-ref_doc_ca      =  'J'.
+        APPEND w_billingdata TO i_billingdata.
+
+        CALL FUNCTION 'BAPI_BILLINGDOC_CREATEMULTIPLE'
+          TABLES
+            billingdatain = i_billingdata
+            return        = i_return_bill
+            success       = i_success.
+
+        READ TABLE i_success INTO DATA(w_success) WITH KEY ref_doc = g_delivery.
+
+*       IF w_success-bill_doc IS NOT INITIAL.                     "MOD01(-)
+        IF sy-subrc EQ 0 AND w_success-bill_doc IS NOT INITIAL.   "MOD01(+)
+          g_invoice = w_success-bill_doc.
+
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait = 'X'.
+
+          CLEAR: i_ec_mast_tmp, w_ec_log, i_ec_log.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                     AND werks   = w_po_div-werks   "Santosh CI# INC0105527
+                                                     AND mblnr IS NOT INITIAL.
+
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+              <fs_ec_mast>-vbeln_vf = w_success-bill_doc.
+              <fs_ec_mast>-status_vf = 'SUCCESS'.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          COMMIT WORK AND WAIT.
+
+        ELSE.
+*If Invoice creation is failed capture messages for log display.
+          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+          CALL FUNCTION 'GUID_CREATE'
+            IMPORTING
+              ev_guid_16 = g_guid.
+
+          CLEAR: w_ec_log, i_ec_mast_tmp.
+          LOOP AT i_ec_mast ASSIGNING <fs_ec_mast> WHERE ecom_po = w_po_div-ecom_po
+                                                     AND werks   = w_po_div-werks.    "Santosh CI# INC0105527
+            READ TABLE i_mara INTO w_mara WITH KEY matnr = <fs_ec_mast>-matnr
+                                                   spart = w_po_div-spart.
+            IF sy-subrc EQ 0.
+              g_fguid = <fs_ec_mast>-fguid.
+              <fs_ec_mast>-status_vf = 'FAILED'.
+              <fs_ec_mast>-error_vf = g_guid.
+              <fs_ec_mast>-aedat = sy-datum.
+              <fs_ec_mast>-aezet = sy-uzeit.
+              <fs_ec_mast>-aenam = sy-uname.
+              APPEND <fs_ec_mast> TO i_ec_mast_tmp.
+            ENDIF.
+          ENDLOOP.
+
+          w_ec_log-fguid = g_fguid.
+          w_ec_log-eguid = g_guid.
+          LOOP AT i_return_bill INTO DATA(w_ret_bill) WHERE type = 'E' OR
+                                                            type = 'W' OR
+                                                            type = 'I'.
+
+            CALL FUNCTION 'GUID_CREATE'
+              IMPORTING
+                ev_guid_16 = g_guid2.
+
+            CLEAR g_msg.
+            CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+              EXPORTING
+                msgid               = w_ret_bill-id
+                msgnr               = w_ret_bill-number
+                msgv1               = w_ret_bill-message_v1
+                msgv2               = w_ret_bill-message_v2
+                msgv3               = w_ret_bill-message_v3
+                msgv4               = w_ret_bill-message_v4
+              IMPORTING
+                message_text_output = g_msg.
+
+            w_ec_log-erguid = g_guid2.
+            w_ec_log-remarks = g_msg.
+            APPEND w_ec_log TO i_ec_log.
+          ENDLOOP.
+
+          MODIFY zec_data FROM TABLE i_ec_mast_tmp.
+          MODIFY zec_log FROM TABLE i_ec_log.
+          COMMIT WORK AND WAIT.
+          CLEAR: i_return_bill[].
+          CLEAR: g_guid.
+          CLEAR: g_sales_ord, g_delivery, g_pgidoc, g_invoice.
+          CONTINUE.
+        ENDIF.
+      ENDIF.
+      CLEAR: w_success.         "MOD01(+)
+      CLEAR: g_guid.
+      CLEAR: g_sales_ord, g_delivery, g_pgidoc, g_invoice, w_po_div.
+*      ENDIF.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.
